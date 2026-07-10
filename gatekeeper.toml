@@ -1,0 +1,388 @@
+# agent-gatekeeper — Default Rules
+#
+# Copy this file to your global config to activate. It is consulted by every
+# harness adapter (claude|codex|grok); tool names are canonicalised in the
+# adapter, so the SAME rules apply verbatim to all three harnesses.
+#
+# Config path resolution (first that exists wins for each layer):
+#   global : ${XDG_CONFIG_HOME:-~/.config}/gatekeeper/gatekeeper.toml, then
+#            ~/.claude/gatekeeper.toml (back-compat; also the first-run write target)
+#   project: <cwd>/.gatekeeper/gatekeeper.toml, then <cwd>/.claude/gatekeeper.toml
+#
+# Rules are evaluated together. Deny ALWAYS wins over allow.
+# All regex patterns are PCRE2-compatible (via regexp2).
+# Use TOML single-quoted strings (') to avoid regex escaping issues.
+#
+# Each commented-out "env-prefix aware" variant prepends (\w+=\S+\s+)*
+# to also match commands like: FOO=bar git reset --hard
+
+# =============================================================================
+# Error behaviour — what the gatekeeper emits on its OWN failure
+#
+# on_error applies to: unparseable stdin, missing/unparseable config, a bad
+# rule regex, an evaluate error, or a recovered panic. A clean "no rule matched"
+# is NOT an error — it always abstains.
+#
+#   "abstain" (default) — emit NO decision; the harness's native permission
+#                         system decides. The gatekeeper never decides FOR the
+#                         permission system (never forces allow OR deny on error).
+#   "deny"              — opt-in hard posture: on any error, emit an explicit deny.
+#
+# Note: on an auto-approve agent (grok --always-approve, codex approval_policy=never)
+# the native decision IS auto-run, so under the default "abstain" a gatekeeper
+# error is a no-op there. The load-bearing push-to-main control in that setup is
+# server-side branch protection; this hook is defense-in-depth.
+# =============================================================================
+on_error = "abstain"
+
+# =============================================================================
+# DENY — Destructive git operations
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = 'git\s+reset\s+--hard'
+decision = "deny"
+reason = "Destructive: git reset --hard"
+# env-prefix aware:
+# input = '(\w+=\S+\s+)*git\s+reset\s+--hard'
+
+[[rules]]
+tool   = 'Bash'
+input  = 'git\s+clean\s+(-[a-zA-Z]*f|--force)'
+decision = "deny"
+reason = "Destructive: git clean with force"
+# env-prefix aware:
+# input = '(\w+=\S+\s+)*git\s+clean\s+(-[a-zA-Z]*f|--force)'
+
+[[rules]]
+tool   = 'Bash'
+input  = 'git\s+push\s+(-[a-zA-Z]*f|--force|--force-with-lease)'
+decision = "deny"
+reason = "Destructive: git force push"
+# env-prefix aware:
+# input = '(\w+=\S+\s+)*git\s+push\s+(-[a-zA-Z]*f|--force|--force-with-lease)'
+
+[[rules]]
+tool   = 'Bash'
+input  = 'git\s+commit\s+.*--amend'
+decision = "deny"
+reason = "Destructive: git commit --amend"
+# env-prefix aware:
+# input = '(\w+=\S+\s+)*git\s+commit\s+.*--amend'
+
+# Force-delete a branch
+[[rules]]
+tool   = 'Bash'
+input  = 'git\s+branch\s+(-[a-zA-Z]*D|--delete\s+--force)'
+decision = "deny"
+reason = "Destructive: git branch force-delete"
+
+# =============================================================================
+# DENY — Push to main/master (explicit branch name in command)
+#
+# Boundary regex (strictly stronger than a "git push <remote> main" glob):
+#   git\s+(?:-C\s+\S+\s+)*push      — also matches `git -C <path> push`
+#   [^|;&]*                         — any args up to a pipe/;/& boundary
+#   then EITHER
+#     [\s:+](main|master)           — main/master preceded by space, ':' (HEAD:main),
+#                                     or '+' (+main force refspec)
+#   OR
+#     \brefs/heads/(main|master)    — the fully-qualified protected ref ONLY
+#   with (?=\s|$|:)                 — only when main/master ends the ref, so a
+#                                     branch named "main-feature", "mainline", or
+#                                     "feature/main" is NOT denied.
+#
+# The '/' delimiter is scoped to `refs/heads/` deliberately: a bare `[\s:+/]`
+# would over-block any ref ending in `/main` (e.g. `feature/main`).
+#
+# Catches: `origin main`, `-u origin main`, `HEAD:main`, `main:main`,
+#          `:main` (delete), `+main`, `refs/heads/main`, `git -C <path> push origin main`.
+# The bare `git push` (current branch IS main) case is caught by the
+# precondition rule below.
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = 'git\s+(?:-C\s+\S+\s+)*push\b[^|;&]*(?:[\s:+](main|master)(?=\s|$|:)|\brefs/heads/(main|master)(?=\s|$|:))'
+decision = "deny"
+reason = "Push to protected branch (main/master)"
+
+# =============================================================================
+# DENY — Push to main/master (implicit — current branch IS main/master)
+#
+# Catches: git push, git push origin, git push --quiet origin
+# Does NOT fire when the command already names main/master (caught above).
+# The precondition shells out to `git branch --show-current`.
+# =============================================================================
+
+[[rules]]
+tool              = 'Bash'
+input             = '\bgit\s+push\b(?!.*\b(main|master)\b)'
+precondition      = 'git branch --show-current'
+precondition_match = '^(main|master)$'
+decision          = "deny"
+reason            = "Implicit push to protected branch (currently on main/master)"
+
+# =============================================================================
+# OPTIONAL — Domain-scoped merge (multi-agent fleets / flotilla#551)
+#
+# Lead seats with a `.gatekeeper/lead` marker may still run
+# `gh pr merge --repo OTHER` if the deny rule only checks the marker in CWD.
+# Pair a lead check with target-repo domain scoping via GATEKEEPER_INPUT
+# (exported by the engine to every precondition shell) and
+# scripts/merge-domain-check.sh:
+#
+#   [[rules]]
+#   tool  = 'Bash'
+#   input = 'gh\s+pr\s+merge\b'
+#   precondition = '/path/to/merge-domain-check.sh'
+#   precondition_match = '^(EXEC|FOREIGN|UNPARSEABLE|NODOMAIN)$'
+#   decision = 'deny'
+#   reason = 'Merge outside seat authority domain or non-lead seat'
+#
+# Domain = lines in .gatekeeper/domain (owner/name), else git remote origin.
+# Fail-closed on unparseable explicit targets. Not enabled in the shipped
+# default rules (single-user installs need no domain split).
+# =============================================================================
+
+# =============================================================================
+# ALLOW — Remove files in build output directories (non-recursive)
+#
+# Allows: rm dist/main.js, rm build/app.wasm, etc.
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '\brm\s+(?!.*(-[a-zA-Z]*r|--recursive)).*(\./?)?(dist|build|out|\.next|node_modules|__pycache__|\.cache|\.turbo|target|\.parcel-cache)/'
+decision = "allow"
+reason = "Remove files in build output directory"
+
+# =============================================================================
+# DENY — Recursive delete (except known build output directories)
+#
+# Allows: rm -rf dist, rm -rf ./build, rm -r __pycache__, etc.
+# Denies: all other recursive deletes
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '\brm\s+(-[a-zA-Z]*r|--recursive)\S*\s+(?!(\./?)?(dist|build|out|\.next|node_modules|__pycache__|\.cache|\.turbo|target|\.parcel-cache)($|&&|\||;))'
+decision = "deny"
+reason = "Destructive: recursive delete (rm -r)"
+# env-prefix aware:
+# input = '(\w+=\S+\s+)*\brm\s+(-[a-zA-Z]*r|--recursive)\S*\s+(?!(\./?)?(dist|build|out|\.next|node_modules|__pycache__|\.cache|\.turbo|target|\.parcel-cache)($|&&|\||;))'
+
+# =============================================================================
+# DENY — sed/awk (force the Edit tool)
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '\b(?:sed|awk)\s'
+decision = "deny"
+reason = "Use the Edit tool instead of sed/awk"
+
+# =============================================================================
+# DENY — Destructive SQL (only when a database CLI tool is in the command)
+#
+# Uses a lookahead to require a known database CLI anywhere in the command,
+# preventing false positives from English words like "drop" in commit messages.
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?si)(?=.*\b(?:psql|mysql|mariadb|sqlite3|mongosh|mongo|redis-cli|cqlsh|duckdb|cockroach|mycli|pgcli|litecli)\b).*\b(DROP|TRUNCATE|DELETE\s+FROM)\b'
+decision = "deny"
+reason = "Destructive SQL operation"
+
+# =============================================================================
+# DENY — npm (use pnpm)
+# =============================================================================
+
+# [[rules]]
+# tool   = 'Bash'
+# input  = '\bnpm\s'
+# decision = "deny"
+# reason = "Use pnpm instead of npm"
+
+# =============================================================================
+# DENY — Credential / secret file reads
+#
+# NOTE: The Read-tool deny rule below wins over the "allow all Read" rule
+# further down because deny always takes priority regardless of order.
+# =============================================================================
+
+[[rules]]
+tool   = 'Read'
+input  = '(^|/)\.env(\..*)?$|\.envrc$|key\.json$|id_rsa|id_ed25519|\.pem$|credentials$|\.secret'
+decision = "deny"
+reason = "Credential/secret file access denied"
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:cat|less|more|head|tail|bat)\s+\S*(\.env\b|\.envrc|key\.json|id_rsa|id_ed25519|\.pem\b|credentials\b|\.secret)'
+decision = "deny"
+reason = "Reading credential/secret file via shell"
+
+# =============================================================================
+# ALLOW — Git (non-destructive, after deny rules filter the rest)
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)git\s'
+decision = "allow"
+reason = "Git operations (non-destructive)"
+# env-prefix aware:
+# input = '(?:^|(\w+=\S+\s+)*)git\s'
+
+# =============================================================================
+# ALLOW — GitHub CLI
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)gh\s'
+decision = "allow"
+reason = "GitHub CLI"
+# env-prefix aware:
+# input = '(?:^|(\w+=\S+\s+)*)gh\s'
+
+# =============================================================================
+# ALLOW — Docker
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:docker|docker-compose|docker compose)\s'
+decision = "allow"
+reason = "Docker"
+
+# =============================================================================
+# ALLOW — Python toolchain
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:uv|pip|pip3|pytest|python|python3|ruff|mypy|black|isort|poetry)\s'
+decision = "allow"
+reason = "Python toolchain"
+
+# =============================================================================
+# ALLOW — Safe shell utilities
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:ls|find|mkdir|curl|wget|diff|wc|cat|head|tail|echo|printf|touch|cp|mv|chmod|which|env|sort|uniq|tee|xargs|tr|cut|basename|dirname|realpath|readlink|stat|file|date|whoami|hostname|uname|id|test|true|false|yes|seq|comm|paste|column|fmt|fold|expand|unexpand|nl|od|hexdump|md5sum|sha256sum|sha1sum|b2sum|cksum|nproc|getconf|free|df|du|uptime)(?:\s|$)'
+decision = "allow"
+reason = "Safe shell utility"
+
+# =============================================================================
+# ALLOW — Go toolchain
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:go|gofmt|goimports|golangci-lint|staticcheck|dlv|gopls|govulncheck)(?:\s|$)'
+decision = "allow"
+reason = "Go toolchain"
+
+# =============================================================================
+# ALLOW — pnpm
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)pnpm\s'
+decision = "allow"
+reason = "pnpm package manager"
+
+# =============================================================================
+# ALLOW — Build systems
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:make|cmake|ninja|gradle|gradlew|cargo|mvn|bazel|buck|scons|meson)(?:\s|$)'
+decision = "allow"
+reason = "Build system"
+
+# =============================================================================
+# ALLOW — OpenSSL
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)openssl\s'
+decision = "allow"
+reason = "OpenSSL"
+
+# =============================================================================
+# ALLOW — JavaScript / TypeScript dev tools
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:node|npx|tsc|eslint|prettier|vitest|jest|playwright|webpack|vite|esbuild|rollup|turbo|tsx|ts-node|bunx|bun)(?:\s|$)'
+decision = "allow"
+reason = "JavaScript/TypeScript tools"
+
+# =============================================================================
+# ALLOW — timeout wrapper (often prefixed to other commands)
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '^timeout\s'
+decision = "allow"
+reason = "Timeout wrapper"
+
+# =============================================================================
+# ALLOW — Common developer utilities
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:jq|yq|tree|ag|rg|fzf|bat|fd|eza|htop|top|ps|kill|lsof|nc|dig|nslookup|ping|traceroute|ssh-keygen|gpg|base64|tar|gzip|gunzip|zip|unzip|xz)(?:\s|$)'
+decision = "allow"
+reason = "Developer utility"
+
+# =============================================================================
+# ALLOW — Infrastructure / cloud tools
+# =============================================================================
+
+[[rules]]
+tool   = 'Bash'
+input  = '(?:^|[|;&]\s*)(?:terraform|tf|terragrunt|kubectl|helm|pulumi|aws|gcloud|az)(?:\s|$)'
+decision = "allow"
+reason = "Infrastructure/cloud tool"
+
+# =============================================================================
+# ALLOW — Non-Bash tools (file browsing, editing, web, agents)
+# =============================================================================
+
+[[rules]]
+tool   = 'Read|Glob|Grep'
+input  = '.*'
+decision = "allow"
+reason = "File browsing"
+
+[[rules]]
+tool   = 'Edit|Write'
+input  = '.*'
+decision = "allow"
+reason = "File editing"
+
+[[rules]]
+tool   = 'WebFetch|WebSearch'
+input  = '.*'
+decision = "allow"
+reason = "Web access"
+
+[[rules]]
+tool   = 'Agent'
+input  = '.*'
+decision = "allow"
+reason = "Subagent"
