@@ -57,6 +57,24 @@ func TestDenyAlwaysWins(t *testing.T) {
 	}
 }
 
+func TestVerdictCarriesMatchingRuleProvenance(t *testing.T) {
+	eng := newEngine(t, []config.Rule{
+		{Tool: "Bash", Input: "danger", Decision: "deny", Reason: "blocked", Source: "/policy/global.toml", SourceIndex: 3},
+		{Tool: "Bash", Input: "danger", Decision: "allow", Reason: "allowed", Source: "/policy/project.toml", SourceIndex: 2},
+	})
+
+	v, err := eng.Evaluate(&canonical.ToolCall{Tool: canonical.ToolBash, InputString: "danger"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Decision != canonical.Deny {
+		t.Fatalf("decision = %s, want deny", v.Decision)
+	}
+	if len(v.Rules) != 1 || v.Rules[0].Source != "/policy/global.toml" || v.Rules[0].Index != 3 {
+		t.Fatalf("provenance = %#v, want global rule 3 only", v.Rules)
+	}
+}
+
 func TestAllowWhenMatched(t *testing.T) {
 	eng := newEngine(t, []config.Rule{
 		{Tool: "Bash", Input: "^git\\s", Decision: "allow", Reason: "allow git"},

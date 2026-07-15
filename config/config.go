@@ -40,6 +40,10 @@ type Rule struct {
 	Reason            string `toml:"reason"`
 	Precondition      string `toml:"precondition,omitempty"`
 	PreconditionMatch string `toml:"precondition_match,omitempty"`
+	// Source and SourceIndex identify the file and 1-based position that
+	// produced this rule. They are runtime metadata, not TOML fields.
+	Source      string `toml:"-"`
+	SourceIndex int    `toml:"-"`
 }
 
 // OnErrorDecision returns the canonical decision to emit on a gatekeeper error,
@@ -183,27 +187,54 @@ func EnsureGlobalConfig(templatePath string) error {
 // scalar fields like on_error; rules accumulate.
 func Load(projectDir string) (*Config, error) {
 	cfg := &Config{}
+	seen := make(map[string]struct{})
 
-	if globalPath := resolveGlobalPath(); globalPath != "" {
-		g, err := LoadFile(globalPath)
-		if err != nil {
-			return nil, fmt.Errorf("global config: %w", err)
+	loadLayer := func(label, path string) error {
+		if path == "" {
+			return nil
 		}
-		mergeInto(cfg, g)
-		canonical.Debugf("loaded global config: %s (%d rules, on_error=%q)", globalPath, len(g.Rules), g.OnError)
+		canonicalPath, err := canonicalConfigPath(path)
+		if err != nil {
+			return fmt.Errorf("%s config: %w", label, err)
+		}
+		if _, duplicate := seen[canonicalPath]; duplicate {
+			canonical.Debugf("skipped duplicate %s config: %s", label, canonicalPath)
+			return nil
+		}
+		seen[canonicalPath] = struct{}{}
+
+		layer, err := LoadFile(canonicalPath)
+		if err != nil {
+			return fmt.Errorf("%s config: %w", label, err)
+		}
+		mergeInto(cfg, layer)
+		canonical.Debugf("loaded %s config: %s (%d rules, on_error=%q)", label, canonicalPath, len(layer.Rules), layer.OnError)
+		return nil
 	}
 
-	if projectPath := resolveProjectPath(projectDir); projectPath != "" {
-		p, err := LoadFile(projectPath)
-		if err != nil {
-			return nil, fmt.Errorf("project config: %w", err)
-		}
-		mergeInto(cfg, p)
-		canonical.Debugf("loaded project config: %s (%d rules, on_error=%q)", projectPath, len(p.Rules), p.OnError)
+	if err := loadLayer("global", resolveGlobalPath()); err != nil {
+		return nil, err
+	}
+	if err := loadLayer("project", resolveProjectPath(projectDir)); err != nil {
+		return nil, err
 	}
 
 	canonical.Debugf("total rules: %d, on_error=%q", len(cfg.Rules), cfg.effectiveOnError())
 	return cfg, nil
+}
+
+// canonicalConfigPath returns a stable absolute identity for a config layer,
+// resolving symlinks so aliases of the same file are merged only once.
+func canonicalConfigPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving absolute path %s: %w", path, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolving config path %s: %w", path, err)
+	}
+	return filepath.Clean(resolved), nil
 }
 
 // mergeInto accumulates src's rules into dst and lets a non-empty src.OnError
@@ -233,6 +264,14 @@ func LoadFile(path string) (*Config, error) {
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	source, err := canonicalConfigPath(path)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cfg.Rules {
+		cfg.Rules[i].Source = source
+		cfg.Rules[i].SourceIndex = i + 1
 	}
 	return &cfg, nil
 }

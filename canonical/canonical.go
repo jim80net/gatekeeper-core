@@ -85,6 +85,15 @@ type ToolCall struct {
 type Verdict struct {
 	Decision Decision
 	Reason   string
+	// Rules identifies the matching policy rules behind this verdict. It is
+	// additive metadata for adapters that want to explain a decision.
+	Rules []RuleProvenance
+}
+
+// RuleProvenance identifies a rule's source file and 1-based index within it.
+type RuleProvenance struct {
+	Source string
+	Index  int
 }
 
 // DebugEnabled controls whether Debugf writes to stderr.
