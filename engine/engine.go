@@ -28,6 +28,7 @@ type CompiledRule struct {
 	PreconditionRegex *regexp2.Regexp
 	Decision          canonical.Decision
 	Reason            string
+	Provenance        canonical.RuleProvenance
 }
 
 // Engine evaluates rules and returns permission decisions.
@@ -79,6 +80,10 @@ func New(cfg *config.Config, debug bool) (*Engine, error) {
 			PreconditionRegex: precondRe,
 			Decision:          decision,
 			Reason:            r.Reason,
+			Provenance: canonical.RuleProvenance{
+				Source: r.Source,
+				Index:  r.SourceIndex,
+			},
 		})
 	}
 	return &Engine{rules: rules, debug: debug, execCommand: defaultExecCommand}, nil
@@ -128,7 +133,9 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 	}
 
 	var denyReasons []string
+	var denyRules []canonical.RuleProvenance
 	anyAllow := false
+	var allowRules []canonical.RuleProvenance
 
 	for _, rule := range e.rules {
 		toolMatch, err := rule.ToolRegex.MatchString(tc.Tool)
@@ -159,18 +166,20 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 		switch rule.Decision {
 		case canonical.Deny:
 			denyReasons = append(denyReasons, rule.Reason)
+			denyRules = append(denyRules, rule.Provenance)
 		case canonical.Allow:
 			anyAllow = true
+			allowRules = append(allowRules, rule.Provenance)
 		}
 	}
 
 	// Deny always wins.
 	if len(denyReasons) > 0 {
-		return canonical.Verdict{Decision: canonical.Deny, Reason: strings.Join(denyReasons, "; ")}, nil
+		return canonical.Verdict{Decision: canonical.Deny, Reason: strings.Join(denyReasons, "; "), Rules: denyRules}, nil
 	}
 
 	if anyAllow {
-		return canonical.Verdict{Decision: canonical.Allow, Reason: "Approved by gatekeeper"}, nil
+		return canonical.Verdict{Decision: canonical.Allow, Reason: "Approved by gatekeeper", Rules: allowRules}, nil
 	}
 
 	// No match → abstain.

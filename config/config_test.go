@@ -162,3 +162,44 @@ reason = "Echo"
 		t.Errorf("unexpected rule: %q", cfg.Rules[0].Reason)
 	}
 }
+
+func TestLoadDeduplicatesCanonicalConfigPath(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, "missing-xdg"))
+
+	globalDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(globalDir, "gatekeeper.toml")
+	if err := os.WriteFile(globalPath, []byte(`
+[[rules]]
+tool = "Bash"
+input = "echo"
+decision = "deny"
+reason = "once"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := filepath.Join(homeDir, "project")
+	projectConfigDir := filepath.Join(projectDir, ".gatekeeper")
+	if err := os.MkdirAll(projectConfigDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(globalPath, filepath.Join(projectConfigDir, "gatekeeper.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("got %d rules, want canonical config loaded once", len(cfg.Rules))
+	}
+	if cfg.Rules[0].Source != globalPath || cfg.Rules[0].SourceIndex != 1 {
+		t.Fatalf("provenance = %q rule %d, want %q rule 1", cfg.Rules[0].Source, cfg.Rules[0].SourceIndex, globalPath)
+	}
+}
