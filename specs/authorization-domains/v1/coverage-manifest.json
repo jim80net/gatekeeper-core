@@ -2,6 +2,13 @@
   "schema_version": "authorization-domains/v1",
   "object_id": "credential://pa/google-service-account-keyfile/v1",
   "enforcement_claim": false,
+  "domain_context": {
+    "fixture_file": "domain-context-cases.json",
+    "mint_source": "server_observed_host",
+    "reject_override_sources": ["client", "worker"],
+    "key_consumers": ["storage", "replay", "rate_limit", "audit"],
+    "same_principal_cross_domain_fixture": true
+  },
   "neutral_replay": {
     "schema": "gatekeeper.auth-domains.replay/v1",
     "schema_file": "neutral-replay.schema.json",
@@ -30,6 +37,16 @@
     ]
   },
   "seams": [
+    {
+      "id": "domain-context-mint",
+      "kind": "domain_context",
+      "critical": true,
+      "owner": "authorization-domains-ingress",
+      "state": "contract_only",
+      "trace_action": "domain_context_minted",
+      "negative_fixture": "worker_community_override_rejected",
+      "known_gap": "No server host resolver or DomainContext minter exists in D1"
+    },
     {
       "id": "policy-store-publish",
       "kind": "policy_store",
@@ -79,6 +96,16 @@
       "trace_action": "protected_effect_attempted",
       "negative_fixture": "direct_path_bypass_denied",
       "known_gap": "Physical backend binding and final PEP are intentionally absent"
+    },
+    {
+      "id": "domain-rate-limit",
+      "kind": "rate_limit",
+      "critical": true,
+      "owner": "authorization-domains-ingress",
+      "state": "contract_only",
+      "trace_action": "rate_limit_key_derived",
+      "negative_fixture": "same_pubkey_community_alpha",
+      "known_gap": "No DomainContext-keyed protected rate limiter exists in D1"
     },
     {
       "id": "worker-lifecycle-archive",

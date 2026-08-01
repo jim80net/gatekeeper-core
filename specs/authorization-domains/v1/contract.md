@@ -9,6 +9,8 @@ Normative source inputs:
   `557c226f4e253e951affafe165ebfea0955389dfce9bd0f787d9da1a121e4fca`.
 - Block Buzz analysis SHA-256
   `cf049f5ca36e7c5ecb3c6d246b8267c730be71eaa887acdc5d4264a528947299`.
+- DomainContext/checker/lifecycle design feedback SHA-256
+  `f04563edeaa90f43f3a966582bc3c79c938bb96df5641045059a60b31f8ee9d8`.
 
 This chapter specifies contracts only. It creates no credential binding, PA
 activation, runtime enforcement, deployment, off-host sink, or paid service.
@@ -105,6 +107,7 @@ DomainContext {
   schema_version: "authorization-domains/v1"
   context_id: unique server-minted ID
   domain_id: server-resolved authority domain
+  resolution: { source: "server_observed_host", resolver_version, evidence_digest }
   principal_id, worker_id, session_id: authenticated bindings
   runtime_identity: { kind: "linux_user" | "container", subject }
   isolation_claim: "unproved" | "proved_linux_user" | "proved_container"
@@ -114,10 +117,36 @@ DomainContext {
 }
 ```
 
-Every protected PEP, policy store, replay, audit, and lifecycle API MUST accept
-the complete server-minted `DomainContext`, never a naked domain ID. It MUST
-reject expired contexts or identity/session substitutions. Claimed and resolved
-context remain distinct in evidence.
+The trusted ingress resolves the domain exactly once from server-observed host
+evidence, mints the immutable context, and passes that value downstream.
+Downstream components MUST NOT re-resolve the host or accept a replacement
+domain/community selector. The presence of a client- or worker-supplied
+community override rejects the protected request before context minting. A
+claimed domain MAY remain as untrusted trace evidence, but it is never copied
+into the resolved fields and never selects authority.
+
+Every protected PEP, policy store, replay, rate-limit, audit, and lifecycle API
+MUST accept the complete server-minted `DomainContext`, never a naked domain ID.
+It MUST reject expired contexts or identity/session substitutions. Claimed and
+resolved context remain distinct in evidence and MUST NOT alias the same trace
+field.
+
+The following abstract keys are normative; serialization is implementation
+specific, but every domain component is read from `DomainContext`:
+
+```text
+storage_key   = (context.domain_id, object_id)
+replay_key    = (context.domain_id, context.context_id, decision_id, pep_id,
+                 materialization_ordinal)
+rate_limit_key = (context.domain_id, context.principal_id, action, object_id,
+                  window_id)
+audit_key     = (context.domain_id, context.context_id, sequence)
+```
+
+No key API accepts a parallel caller domain/community argument. The same
+authenticated public key under two server-resolved communities MUST produce
+different storage, replay, rate-limit, and audit keys. The executable cases are
+in `domain-context-cases.json`.
 
 ## 4. Normative request and decision
 
@@ -269,16 +298,21 @@ reported erased.
 
 ## 8. Independent conformance and differential fixtures
 
-The conformance checker MUST import no production evaluator, canonicalizer,
-policy store, or PEP package. It reimplements this transition relation from
-fixture data. Traces preserve claimed and resolved context separately. Missing
-or unknown critical trace actions are coverage failures.
+The conformance checker MUST import no production module, including production
+evaluator, canonicalizer, policy store, replay, rate-limit, audit, lifecycle, or
+PEP packages. It reimplements this transition relation from fixture data and
+self-checks its imports. Traces preserve claimed and resolved context as
+separate fields. Missing, unknown, or explicitly untraced critical trace actions
+are coverage failures, and the checker carries negative tests that prove those
+states fail rather than self-bless.
 
 Fixtures cover at minimum: ordinary open work; exact block denial; exact
-exception permit; wrong worker/session/domain; unknown protected action; stale
-generation; expired exception/context; ambiguous generation rejection; CAS and
-idempotency; audit/replay unavailable; direct-path and symlink bypass; revoke;
-archive completeness; and lifecycle mechanics that do not overclaim isolation.
+exception permit; wrong worker/session/domain; client and worker community
+override rejection; the same public key under two communities; unknown
+protected action; stale generation; expired exception/context; ambiguous
+generation rejection; CAS and idempotency; audit/replay unavailable; direct-path
+and symlink bypass; revoke; archive completeness; and lifecycle mechanics that
+do not overclaim isolation.
 
 Differential execution against a future production implementation is an I1a
 gate. D1 fixture success alone is not runtime proof.
