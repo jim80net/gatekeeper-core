@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -27,7 +28,20 @@ type coverageManifest struct {
 	SchemaVersion    string `json:"schema_version"`
 	ObjectID         string `json:"object_id"`
 	EnforcementClaim bool   `json:"enforcement_claim"`
-	Seams            []struct {
+	NeutralReplay    struct {
+		Schema                  string `json:"schema"`
+		SchemaFile              string `json:"schema_file"`
+		LifecycleContractSHA256 string `json:"lifecycle_contract_sha256"`
+		LifecycleProbeRegistry  string `json:"lifecycle_probe_registry"`
+		IndependentCheckerHead  string `json:"independent_checker_head"`
+		Coverage                []struct {
+			Name           string   `json:"name"`
+			Critical       bool     `json:"critical"`
+			RequiredTraced bool     `json:"required_traced"`
+			MapsTo         []string `json:"maps_to"`
+		} `json:"coverage"`
+	} `json:"neutral_replay"`
+	Seams []struct {
 		ID              string `json:"id"`
 		Kind            string `json:"kind"`
 		Critical        bool   `json:"critical"`
@@ -44,6 +58,21 @@ type fixtureDocument struct {
 	ObjectID      string        `json:"object_id"`
 	Cases         []fixtureCase `json:"cases"`
 	TraceActions  []string      `json:"trace_actions"`
+}
+
+type lifecycleProbeRegistry struct {
+	SchemaVersion     string   `json:"schema_version"`
+	SourceSHA256      string   `json:"source_sha256"`
+	SyntheticObject   string   `json:"synthetic_object"`
+	Action            string   `json:"action"`
+	Claims            []string `json:"claims"`
+	ClaimInvalidators []string `json:"claim_invalidators"`
+	ProbeCount        int      `json:"probe_count"`
+	Probes            []struct {
+		ID       string `json:"id"`
+		Expected string `json:"expected"`
+		Reason   string `json:"reason,omitempty"`
+	} `json:"probes"`
 }
 
 type fixtureCase struct {
@@ -103,6 +132,37 @@ func TestInitialActionRegistryIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestPinnedLifecycleProbeRegistry(t *testing.T) {
+	var registry lifecycleProbeRegistry
+	readStrictJSON(t, "lifecycle-probes.json", &registry)
+	if registry.SourceSHA256 != "4a5d12ff96b136db5bd7e78c9467a222c242be99c060d5a17fe267725bc9caff" {
+		t.Fatalf("lifecycle source pin = %q", registry.SourceSHA256)
+	}
+	if registry.SyntheticObject != "fixture://authorization-domains/protected/exact-read-object" || registry.Action != "read" {
+		t.Fatalf("lifecycle registry widened protected binding: object=%q action=%q", registry.SyntheticObject, registry.Action)
+	}
+	if registry.ProbeCount != 38 || len(registry.Probes) != registry.ProbeCount {
+		t.Fatalf("probe count metadata=%d actual=%d, want 38", registry.ProbeCount, len(registry.Probes))
+	}
+	wantPrefixes := map[string]int{"UID": 7, "CTR": 7, "PROC": 6, "ENV": 4, "LIFE": 8, "PA": 5, "ROOT": 1}
+	gotPrefixes := map[string]int{}
+	seen := map[string]bool{}
+	for _, probe := range registry.Probes {
+		prefix := probe.ID
+		if i := strings.IndexByte(prefix, '-'); i >= 0 {
+			prefix = prefix[:i]
+		}
+		if probe.ID == "" || probe.Expected == "" || seen[probe.ID] {
+			t.Errorf("invalid or duplicate probe: %#v", probe)
+		}
+		seen[probe.ID] = true
+		gotPrefixes[prefix]++
+	}
+	if !reflect.DeepEqual(gotPrefixes, wantPrefixes) {
+		t.Fatalf("probe family counts = %#v, want %#v", gotPrefixes, wantPrefixes)
+	}
+}
+
 func TestCoverageManifestIsHonestAndComplete(t *testing.T) {
 	var manifest coverageManifest
 	var fixtures fixtureDocument
@@ -144,6 +204,32 @@ func TestCoverageManifestIsHonestAndComplete(t *testing.T) {
 	}
 	if len(seenSeams) != 6 {
 		t.Fatalf("got %d critical seams, want 6", len(seenSeams))
+	}
+	if manifest.NeutralReplay.Schema != "gatekeeper.auth-domains.replay/v1" ||
+		manifest.NeutralReplay.SchemaFile != "neutral-replay.schema.json" ||
+		manifest.NeutralReplay.LifecycleContractSHA256 != "4a5d12ff96b136db5bd7e78c9467a222c242be99c060d5a17fe267725bc9caff" ||
+		manifest.NeutralReplay.LifecycleProbeRegistry != "lifecycle-probes.json" ||
+		manifest.NeutralReplay.IndependentCheckerHead != "8e376c79d64bc720b280ab839058cc71ca774990" {
+		t.Fatalf("neutral replay pin mismatch: %#v", manifest.NeutralReplay)
+	}
+	wantNeutral := map[string]bool{
+		"ordinary-work":        false,
+		"protected-read-pep":   true,
+		"protected-read-audit": true,
+	}
+	if len(manifest.NeutralReplay.Coverage) != len(wantNeutral) {
+		t.Fatalf("got %d neutral seams, want %d", len(manifest.NeutralReplay.Coverage), len(wantNeutral))
+	}
+	for _, seam := range manifest.NeutralReplay.Coverage {
+		critical, ok := wantNeutral[seam.Name]
+		if !ok || critical != seam.Critical || !seam.RequiredTraced || len(seam.MapsTo) == 0 {
+			t.Errorf("invalid neutral seam: %#v", seam)
+		}
+		for _, implementationSeam := range seam.MapsTo {
+			if !seenSeams[implementationSeam] {
+				t.Errorf("neutral seam %q maps to unknown implementation seam %q", seam.Name, implementationSeam)
+			}
+		}
 	}
 }
 

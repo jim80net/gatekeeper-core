@@ -196,23 +196,76 @@ bytes are reported honestly; revoke cannot make them unknown.
 
 ## 7. Lifecycle, isolation, preserve, and archive
 
+The normative lifecycle input is pinned by SHA-256
+`4a5d12ff96b136db5bd7e78c9467a222c242be99c060d5a17fe267725bc9caff`.
+`lifecycle-probes.json` is its machine-readable claim and probe registry. The
+source matrix contains 38 named probes despite the dispatch shorthand of 36;
+all 38 are normative and none may be silently omitted.
+
+Every worker generation emits exactly one derived claim: `none`,
+`dedicated_uid`, `rootless_container`, or
+`dedicated_uid+rootless_container`. A caller cannot request a claim. Unknown,
+unreadable, stale, contradictory, skipped, timed-out, or indeterminate evidence
+produces `none`, a durable reason code, and a failed or quarantined receipt.
+Lifecycle hygiene—including process groups, sessions, cgroups, queues,
+timeouts, and environment reconstruction—does not by itself earn isolation.
+Host root remains explicitly outside every claim and receipts state
+`threat_model_excludes_host_root`.
+
+Claim invalidators include shared or host-root UID; privileged containers;
+unbounded capabilities/devices; host PID or disabled user namespace; reachable
+container-engine control; broad or writable host mounts; unmanifested aliases,
+hard links, inherited descriptors, environments, or peer-controlled resolver
+sockets; runtime drift; and any mandatory probe without a determinate result.
+An invalidator suppresses the relevant claim and quarantines the binding where
+live state may have diverged.
+
 The lifecycle state machine is:
 
 ```text
-provision -> operate -> preserve -> archive
+ABSENT -> PROVISIONING -> READY -> OPERATING -> QUIESCING
+                                      |             |
+                                      v             v
+                                  QUARANTINED <- PRESERVED -> ARCHIVING -> ARCHIVED
 ```
 
-Lifecycle mechanics MUST bound queues, concurrency, timeouts, restarts, and
-process-tree cleanup; child environments are cleared and reconstructed from a
-minimal non-secret allowlist. These mechanics never earn an isolation claim.
-Only recorded cross-worker probes under a dedicated Linux UID or constrained
-container may set a proved isolation value. Shared UID and process groups remain
-`unproved`.
+Each transition has an append-only, predecessor-linked `LifecycleReceipt`
+bound to worker generation, transition ID and input digest, policy generation,
+runtime/spec observations, derived claim and reason codes, and outcome
+`success`, `failed`, or `quarantined`. Same-ID/same-input retry returns the prior
+receipt; mutable identifiers, generation regression, missing predecessor,
+unknown schema, or same-ID/different-input reject. Recovery resumes from the
+last durable receipt, re-observes reality, and never automatically moves a
+quarantined worker back to operating.
+
+Workers execute only inside a supervisor-owned cgroup or equivalent stable
+kernel scope. Finite start, operation, TERM, KILL, and reap deadlines plus CPU,
+memory, PID, and storage bounds apply before worker code. Stop closes admission,
+signals the whole scope, escalates, reaps, and proves the stable scope empty.
+PID lists and process groups are insufficient proof. Escaped, unobservable, or
+unreapable descendants quarantine the binding and make archive incomplete.
+
+Children start with an empty environment reconstructed from a versioned minimal
+non-secret allowlist. Caller overrides of identity, session, generation,
+policy, resolver, audit, or supervisor fields reject or are replaced by
+server-minted values. Credential values/paths, provider auth variables, agent
+or SSH sockets, authorization headers, parent secrets, and non-allowlisted file
+descriptors never cross exec. Receipts contain sorted variable names and a
+redacted value digest, never values; restart reconstructs from the base profile.
+
+Preserve blocks new protected reads, quiesces the supervised tree, and exports
+only allowlisted artifacts with provenance and custody digests. Positive or
+indeterminate scans for protected IDs/content classes, live mounts, sockets,
+descriptors, or environment material quarantine the candidate. Useful-artifact
+readability and protected-material absence are separate assertions.
 
 Archive is a revoke drill. Its immutable receipt records worker/session stop,
 successor generation, exception removal, absence of protected mounts/material
 from the bundle, artifact custody/retention, useful-artifact readability, known
 residuals, and any failed step. A partial receipt cannot claim completion.
+Archive additionally closes leases, removes endpoints, proves the supervisor
+scope empty, and repeats sibling probes. Already-materialized bytes are never
+reported erased.
 
 ## 8. Independent conformance and differential fixtures
 
@@ -229,3 +282,56 @@ archive completeness; and lifecycle mechanics that do not overclaim isolation.
 
 Differential execution against a future production implementation is an I1a
 gate. D1 fixture success alone is not runtime proof.
+
+### 8.1 Neutral replay export
+
+Independent differential runners exchange `gatekeeper.auth-domains.replay/v1`
+documents described by `neutral-replay.schema.json`. The export has exactly
+three closed coverage seams:
+
+| seam | critical | contract mapping |
+| --- | --- | --- |
+| `ordinary-work` | no | ordinary open-by-default work |
+| `protected-read-pep` | yes | evaluator, replay claim, and final PEP |
+| `protected-read-audit` | yes | durable audit admission |
+
+Every critical seam MUST be present and traced. Records on unknown seams,
+unknown critical seams, and missing or untraced critical seams fail replay
+conformance. The broader implementation inventory remains normative for a
+future enforcement claim; this closed export registry is only its neutral
+differential projection.
+
+Each record keeps `claimed_context` and `resolved_context` distinct. A
+protected record MUST bind its decision to the server-resolved context ID and
+identify `server_resolved` as its context source; caller claims never grant
+authority. The independent checker uses the inert synthetic object
+`fixture://authorization-domains/protected/exact-read-object`, not the PA
+object ID or any physical credential locator. Its current decision projection
+covers ordinary `allow/unprotected` and protected `deny/protected_block`.
+
+The successor checker alignment carries four explicit projection constraints:
+
+1. Normative `permit_exception` has no representation in the current neutral
+   oracle. The two supported mappings are `permit_unblocked` to
+   `allow/unprotected` and `deny_blocked` to `deny/protected_block`; an
+   exception-permit differential claim remains out of scope until the neutral
+   schema and independent oracle add it together.
+2. Neutral `request.class/action/object` deliberately omits normative
+   `request_id`, policy generation, classifier version, request time, and object
+   canonicalization metadata. It is a denial replay projection, not a lossless
+   encoding of `AuthzRequest`; broader differential use requires a versioned
+   mapping for those fields.
+3. The opaque PA logical object in the normative coverage inventory and the
+   inert `fixture://authorization-domains/protected/exact-read-object` URI are
+   distinct. Only the fixture URI may appear in neutral D1 evidence; it is not a
+   credential path, alias, or production-object locator.
+4. This contract requires `ordinary-work` to be traced even though the oracle
+   classifies it noncritical and mechanically requires tracing only for critical
+   seams. The local rule is intentionally stricter and remains compatible with
+   the oracle.
+
+Lifecycle probe receipts carry `probe_id`, trace and expected/actual result,
+reason code, runtime generation, specification and evidence digests, audit
+outcome ID, duration, post-probe claim, receipt outcome, signer ID, and
+signature. An absent, failed, or unverifiable isolation probe suppresses a
+proved isolation claim; lifecycle mechanics alone never establish isolation.

@@ -2,6 +2,33 @@
   "schema_version": "authorization-domains/v1",
   "object_id": "credential://pa/google-service-account-keyfile/v1",
   "enforcement_claim": false,
+  "neutral_replay": {
+    "schema": "gatekeeper.auth-domains.replay/v1",
+    "schema_file": "neutral-replay.schema.json",
+    "lifecycle_contract_sha256": "4a5d12ff96b136db5bd7e78c9467a222c242be99c060d5a17fe267725bc9caff",
+    "lifecycle_probe_registry": "lifecycle-probes.json",
+    "independent_checker_head": "8e376c79d64bc720b280ab839058cc71ca774990",
+    "coverage": [
+      {
+        "name": "ordinary-work",
+        "critical": false,
+        "required_traced": true,
+        "maps_to": ["policy-evaluator"]
+      },
+      {
+        "name": "protected-read-pep",
+        "critical": true,
+        "required_traced": true,
+        "maps_to": ["policy-evaluator", "decision-replay-claim", "pa-credential-final-pep"]
+      },
+      {
+        "name": "protected-read-audit",
+        "critical": true,
+        "required_traced": true,
+        "maps_to": ["durable-audit-admission"]
+      }
+    ]
+  },
   "seams": [
     {
       "id": "policy-store-publish",

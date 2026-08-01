@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gatekeeper.auth-domains.replay/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lifecycle_contract_sha256", "coverage", "records", "probes"],
+  "properties": {
+    "schema": { "const": "gatekeeper.auth-domains.replay/v1" },
+    "lifecycle_contract_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "critical", "traced"],
+        "properties": {
+          "name": { "enum": ["ordinary-work", "protected-read-pep", "protected-read-audit"] },
+          "critical": { "type": "boolean" },
+          "traced": { "type": "boolean" }
+        }
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/record" }
+    },
+    "probes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/probe" }
+    }
+  },
+  "$defs": {
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context_id", "worker_id", "session_id", "domain_id", "minted_by"],
+      "properties": {
+        "context_id": { "type": "string" },
+        "worker_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "domain_id": { "type": "string" },
+        "minted_by": { "type": "string" }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "seam", "request", "claimed_context", "resolved_context", "decision"],
+      "properties": {
+        "id": { "type": "string" },
+        "seam": { "enum": ["ordinary-work", "protected-read-pep", "protected-read-audit"] },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class", "action", "object"],
+          "properties": {
+            "class": { "type": "string" },
+            "action": { "type": "string" },
+            "object": { "type": "string" }
+          }
+        },
+        "claimed_context": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/context" }
+          ]
+        },
+        "resolved_context": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/context" }
+          ]
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "reason", "context_source", "resolved_context_id"],
+          "properties": {
+            "outcome": { "enum": ["allow", "deny"] },
+            "reason": { "enum": ["unprotected", "protected_block"] },
+            "context_source": { "enum": ["none", "server_resolved"] },
+            "resolved_context_id": { "type": "string" }
+          }
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe_id", "traced", "expected_result", "actual_result", "reason_code", "runtime_generation", "spec_digest", "evidence_digest", "audit_outcome_id", "duration_ms", "claim_after", "receipt_outcome", "signer_id", "signature"],
+      "properties": {
+        "probe_id": { "type": "string" },
+        "traced": { "type": "boolean" },
+        "expected_result": { "type": "string" },
+        "actual_result": { "type": "string" },
+        "reason_code": { "type": "string" },
+        "runtime_generation": { "type": "integer", "minimum": 0 },
+        "spec_digest": { "type": "string" },
+        "evidence_digest": { "type": "string" },
+        "audit_outcome_id": { "type": "string" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "claim_after": { "type": "string" },
+        "receipt_outcome": { "type": "string" },
+        "signer_id": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}

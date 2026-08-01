@@ -13,6 +13,10 @@ Artifacts:
 - `contract.md` — normative semantics and type contracts.
 - `action-registry.json` — the complete initial worker action registry (`read`).
 - `coverage-manifest.json` — every critical seam and its honest D1-only state.
+- `neutral-replay.schema.json` — the implementation-neutral export wire consumed
+  by the independent replay checker.
+- `lifecycle-probes.json` — the pinned lifecycle/isolation claims, invalidators,
+  and complete synthetic probe registry.
 - `fixtures/cases.json` — policy compilation, decision, audit, revoke, and
   lifecycle differential cases.
 - `conformance/conformance_test.go` — implementation-independent fixture and
@@ -27,3 +31,8 @@ go test ./specs/authorization-domains/v1/conformance
 Passing this package means only that the proposal is internally consistent. It
 does not claim that a final PEP, worker isolation, durable audit, credential
 backend, or archive implementation exists.
+
+The neutral replay wire and its closed three-seam coverage registry are aligned
+with the independent checker at `8e376c79d64bc720b280ab839058cc71ca774990`.
+That alignment shares only contract data: neither this package nor the checker
+imports a production evaluator or canonicalizer.
