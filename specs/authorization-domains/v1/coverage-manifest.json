@@ -1,0 +1,67 @@
+{
+  "schema_version": "authorization-domains/v1",
+  "object_id": "credential://pa/google-service-account-keyfile/v1",
+  "enforcement_claim": false,
+  "seams": [
+    {
+      "id": "policy-store-publish",
+      "kind": "policy_store",
+      "critical": true,
+      "owner": "authorization-domains-management-plane",
+      "state": "contract_only",
+      "trace_action": "policy_generation_published",
+      "negative_fixture": "cas_mismatch_retains_last_good",
+      "known_gap": "No immutable generation store exists in D1"
+    },
+    {
+      "id": "policy-evaluator",
+      "kind": "evaluator",
+      "critical": true,
+      "owner": "gatekeeper-core",
+      "state": "contract_only",
+      "trace_action": "decision_evaluated",
+      "negative_fixture": "blocked_without_exception",
+      "known_gap": "No Authorization Domains evaluator exists in D1"
+    },
+    {
+      "id": "durable-audit-admission",
+      "kind": "audit",
+      "critical": true,
+      "owner": "authorization-domains-audit",
+      "state": "contract_only",
+      "trace_action": "decision_durably_admitted",
+      "negative_fixture": "audit_unavailable_stops_effect",
+      "known_gap": "No authoritative local audit writer exists in D1"
+    },
+    {
+      "id": "decision-replay-claim",
+      "kind": "replay",
+      "critical": true,
+      "owner": "authorization-domains-final-pep",
+      "state": "contract_only",
+      "trace_action": "materialization_claimed",
+      "negative_fixture": "replay_stops_second_materialization",
+      "known_gap": "No replay store exists in D1"
+    },
+    {
+      "id": "pa-credential-final-pep",
+      "kind": "final_pep",
+      "critical": true,
+      "owner": "pa-credential-backend",
+      "state": "contract_only",
+      "trace_action": "protected_effect_attempted",
+      "negative_fixture": "direct_path_bypass_denied",
+      "known_gap": "Physical backend binding and final PEP are intentionally absent"
+    },
+    {
+      "id": "worker-lifecycle-archive",
+      "kind": "lifecycle",
+      "critical": true,
+      "owner": "worker-lifecycle-manager",
+      "state": "contract_only",
+      "trace_action": "archive_receipt_sealed",
+      "negative_fixture": "archive_missing_revoke_is_incomplete",
+      "known_gap": "Lifecycle manager and isolation boundary are not implemented"
+    }
+  ]
+}

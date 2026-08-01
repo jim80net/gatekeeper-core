@@ -1,0 +1,10 @@
+{
+  "schema_version": "authorization-domains/v1",
+  "registry_version": "1",
+  "actions": [
+    {
+      "name": "read",
+      "meaning": "observe or materialize bytes from an exact protected object"
+    }
+  ]
+}
