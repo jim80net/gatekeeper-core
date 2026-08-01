@@ -13,6 +13,8 @@ Artifacts:
 - `contract.md` — normative semantics and type contracts.
 - `action-registry.json` — the complete initial worker action registry (`read`).
 - `coverage-manifest.json` — every critical seam and its honest D1-only state.
+- `domain-context-cases.json` — server-mint, override rejection, and same-principal
+  cross-community key-separation cases.
 - `neutral-replay.schema.json` — the implementation-neutral export wire consumed
   by the independent replay checker.
 - `lifecycle-probes.json` — the pinned lifecycle/isolation claims, invalidators,

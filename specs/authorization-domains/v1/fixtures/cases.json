@@ -205,16 +205,46 @@
       "kind": "lifecycle",
       "process_tree_bounded": true,
       "environment_reconstructed": true,
-      "uid_or_container_probe_passed": false,
+      "pools_bounded": true,
+      "timeouts_enforced": true,
+      "process_group_managed": true,
+      "dedicated_uid_probe_passed": false,
+      "container_probe_passed": false,
       "expected_isolation_claim": "unproved"
+    },
+    {
+      "name": "dedicated_uid_evidence_is_required_for_linux_user_claim",
+      "kind": "lifecycle",
+      "process_tree_bounded": true,
+      "environment_reconstructed": true,
+      "pools_bounded": true,
+      "timeouts_enforced": true,
+      "process_group_managed": true,
+      "dedicated_uid_probe_passed": true,
+      "container_probe_passed": false,
+      "expected_isolation_claim": "proved_linux_user"
+    },
+    {
+      "name": "container_evidence_is_required_for_container_claim",
+      "kind": "lifecycle",
+      "process_tree_bounded": true,
+      "environment_reconstructed": true,
+      "pools_bounded": true,
+      "timeouts_enforced": true,
+      "process_group_managed": true,
+      "dedicated_uid_probe_passed": false,
+      "container_probe_passed": true,
+      "expected_isolation_claim": "proved_container"
     }
   ],
   "trace_actions": [
+    "domain_context_minted",
     "policy_generation_published",
     "decision_evaluated",
     "decision_durably_admitted",
     "materialization_claimed",
     "protected_effect_attempted",
-    "archive_receipt_sealed"
+    "archive_receipt_sealed",
+    "rate_limit_key_derived"
   ]
 }

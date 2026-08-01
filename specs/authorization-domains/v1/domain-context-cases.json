@@ -1,0 +1,54 @@
+{
+  "schema_version": "authorization-domains/v1",
+  "object_id": "credential://pa/google-service-account-keyfile/v1",
+  "cases": [
+    {
+      "name": "same_pubkey_community_alpha",
+      "principal_public_key": "fixture-pubkey-same-principal",
+      "observed_host": "alpha.fixture.invalid",
+      "resolved_domain_id": "community-alpha",
+      "claimed_domain_id": "community-beta",
+      "override_source": "none",
+      "override_domain_id": "",
+      "expected_context_id": "ctx-community-alpha",
+      "expected_mint": true,
+      "expected_resolution_calls": 1
+    },
+    {
+      "name": "same_pubkey_community_beta",
+      "principal_public_key": "fixture-pubkey-same-principal",
+      "observed_host": "beta.fixture.invalid",
+      "resolved_domain_id": "community-beta",
+      "claimed_domain_id": "community-alpha",
+      "override_source": "none",
+      "override_domain_id": "",
+      "expected_context_id": "ctx-community-beta",
+      "expected_mint": true,
+      "expected_resolution_calls": 1
+    },
+    {
+      "name": "client_community_override_rejected",
+      "principal_public_key": "fixture-pubkey-client-override",
+      "observed_host": "alpha.fixture.invalid",
+      "resolved_domain_id": "community-alpha",
+      "claimed_domain_id": "community-beta",
+      "override_source": "client",
+      "override_domain_id": "community-beta",
+      "expected_context_id": "",
+      "expected_mint": false,
+      "expected_resolution_calls": 0
+    },
+    {
+      "name": "worker_community_override_rejected",
+      "principal_public_key": "fixture-pubkey-worker-override",
+      "observed_host": "alpha.fixture.invalid",
+      "resolved_domain_id": "community-alpha",
+      "claimed_domain_id": "community-beta",
+      "override_source": "worker",
+      "override_domain_id": "community-beta",
+      "expected_context_id": "",
+      "expected_mint": false,
+      "expected_resolution_calls": 0
+    }
+  ]
+}
