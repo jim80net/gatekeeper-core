@@ -7,7 +7,7 @@
     "schema_file": "neutral-replay.schema.json",
     "lifecycle_contract_sha256": "4a5d12ff96b136db5bd7e78c9467a222c242be99c060d5a17fe267725bc9caff",
     "lifecycle_probe_registry": "lifecycle-probes.json",
-    "independent_checker_head": "1cc451f1ff89aaf8a495b7495a5634ad2609690e",
+    "independent_checker_head": "8e376c79d64bc720b280ab839058cc71ca774990",
     "coverage": [
       {
         "name": "ordinary-work",

@@ -33,6 +33,6 @@ does not claim that a final PEP, worker isolation, durable audit, credential
 backend, or archive implementation exists.
 
 The neutral replay wire and its closed three-seam coverage registry are aligned
-with the independent checker at `1cc451f1ff89aaf8a495b7495a5634ad2609690e`.
+with the independent checker at `8e376c79d64bc720b280ab839058cc71ca774990`.
 That alignment shares only contract data: neither this package nor the checker
 imports a production evaluator or canonicalizer.

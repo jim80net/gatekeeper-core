@@ -209,7 +209,7 @@ func TestCoverageManifestIsHonestAndComplete(t *testing.T) {
 		manifest.NeutralReplay.SchemaFile != "neutral-replay.schema.json" ||
 		manifest.NeutralReplay.LifecycleContractSHA256 != "4a5d12ff96b136db5bd7e78c9467a222c242be99c060d5a17fe267725bc9caff" ||
 		manifest.NeutralReplay.LifecycleProbeRegistry != "lifecycle-probes.json" ||
-		manifest.NeutralReplay.IndependentCheckerHead != "1cc451f1ff89aaf8a495b7495a5634ad2609690e" {
+		manifest.NeutralReplay.IndependentCheckerHead != "8e376c79d64bc720b280ab839058cc71ca774990" {
 		t.Fatalf("neutral replay pin mismatch: %#v", manifest.NeutralReplay)
 	}
 	wantNeutral := map[string]bool{
