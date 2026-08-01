@@ -229,3 +229,35 @@ archive completeness; and lifecycle mechanics that do not overclaim isolation.
 
 Differential execution against a future production implementation is an I1a
 gate. D1 fixture success alone is not runtime proof.
+
+### 8.1 Neutral replay export
+
+Independent differential runners exchange `gatekeeper.auth-domains.replay/v1`
+documents described by `neutral-replay.schema.json`. The export has exactly
+three closed coverage seams:
+
+| seam | critical | contract mapping |
+| --- | --- | --- |
+| `ordinary-work` | no | ordinary open-by-default work |
+| `protected-read-pep` | yes | evaluator, replay claim, and final PEP |
+| `protected-read-audit` | yes | durable audit admission |
+
+Every critical seam MUST be present and traced. Records on unknown seams,
+unknown critical seams, and missing or untraced critical seams fail replay
+conformance. The broader implementation inventory remains normative for a
+future enforcement claim; this closed export registry is only its neutral
+differential projection.
+
+Each record keeps `claimed_context` and `resolved_context` distinct. A
+protected record MUST bind its decision to the server-resolved context ID and
+identify `server_resolved` as its context source; caller claims never grant
+authority. The independent checker uses the inert synthetic object
+`fixture://authorization-domains/protected/exact-read-object`, not the PA
+object ID or any physical credential locator. Its current decision projection
+covers ordinary `allow/unprotected` and protected `deny/protected_block`.
+
+Lifecycle probe receipts carry `probe_id`, trace and expected/actual result,
+reason code, runtime generation, specification and evidence digests, audit
+outcome ID, duration, post-probe claim, receipt outcome, signer ID, and
+signature. An absent, failed, or unverifiable isolation probe suppresses a
+proved isolation claim; lifecycle mechanics alone never establish isolation.

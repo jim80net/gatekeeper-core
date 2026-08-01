@@ -27,7 +27,18 @@ type coverageManifest struct {
 	SchemaVersion    string `json:"schema_version"`
 	ObjectID         string `json:"object_id"`
 	EnforcementClaim bool   `json:"enforcement_claim"`
-	Seams            []struct {
+	NeutralReplay    struct {
+		Schema                 string `json:"schema"`
+		SchemaFile             string `json:"schema_file"`
+		IndependentCheckerHead string `json:"independent_checker_head"`
+		Coverage               []struct {
+			Name           string   `json:"name"`
+			Critical       bool     `json:"critical"`
+			RequiredTraced bool     `json:"required_traced"`
+			MapsTo         []string `json:"maps_to"`
+		} `json:"coverage"`
+	} `json:"neutral_replay"`
+	Seams []struct {
 		ID              string `json:"id"`
 		Kind            string `json:"kind"`
 		Critical        bool   `json:"critical"`
@@ -144,6 +155,30 @@ func TestCoverageManifestIsHonestAndComplete(t *testing.T) {
 	}
 	if len(seenSeams) != 6 {
 		t.Fatalf("got %d critical seams, want 6", len(seenSeams))
+	}
+	if manifest.NeutralReplay.Schema != "gatekeeper.auth-domains.replay/v1" ||
+		manifest.NeutralReplay.SchemaFile != "neutral-replay.schema.json" ||
+		manifest.NeutralReplay.IndependentCheckerHead != "1cc451f1ff89aaf8a495b7495a5634ad2609690e" {
+		t.Fatalf("neutral replay pin mismatch: %#v", manifest.NeutralReplay)
+	}
+	wantNeutral := map[string]bool{
+		"ordinary-work":        false,
+		"protected-read-pep":   true,
+		"protected-read-audit": true,
+	}
+	if len(manifest.NeutralReplay.Coverage) != len(wantNeutral) {
+		t.Fatalf("got %d neutral seams, want %d", len(manifest.NeutralReplay.Coverage), len(wantNeutral))
+	}
+	for _, seam := range manifest.NeutralReplay.Coverage {
+		critical, ok := wantNeutral[seam.Name]
+		if !ok || critical != seam.Critical || !seam.RequiredTraced || len(seam.MapsTo) == 0 {
+			t.Errorf("invalid neutral seam: %#v", seam)
+		}
+		for _, implementationSeam := range seam.MapsTo {
+			if !seenSeams[implementationSeam] {
+				t.Errorf("neutral seam %q maps to unknown implementation seam %q", seam.Name, implementationSeam)
+			}
+		}
 	}
 }
 
