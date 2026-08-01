@@ -309,6 +309,27 @@ authority. The independent checker uses the inert synthetic object
 object ID or any physical credential locator. Its current decision projection
 covers ordinary `allow/unprotected` and protected `deny/protected_block`.
 
+The successor checker alignment carries four explicit projection constraints:
+
+1. Normative `permit_exception` has no representation in the current neutral
+   oracle. The two supported mappings are `permit_unblocked` to
+   `allow/unprotected` and `deny_blocked` to `deny/protected_block`; an
+   exception-permit differential claim remains out of scope until the neutral
+   schema and independent oracle add it together.
+2. Neutral `request.class/action/object` deliberately omits normative
+   `request_id`, policy generation, classifier version, request time, and object
+   canonicalization metadata. It is a denial replay projection, not a lossless
+   encoding of `AuthzRequest`; broader differential use requires a versioned
+   mapping for those fields.
+3. The opaque PA logical object in the normative coverage inventory and the
+   inert `fixture://authorization-domains/protected/exact-read-object` URI are
+   distinct. Only the fixture URI may appear in neutral D1 evidence; it is not a
+   credential path, alias, or production-object locator.
+4. This contract requires `ordinary-work` to be traced even though the oracle
+   classifies it noncritical and mechanically requires tracing only for critical
+   seams. The local rule is intentionally stricter and remains compatible with
+   the oracle.
+
 Lifecycle probe receipts carry `probe_id`, trace and expected/actual result,
 reason code, runtime generation, specification and evidence digests, audit
 outcome ID, duration, post-probe claim, receipt outcome, signer ID, and
