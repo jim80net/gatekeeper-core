@@ -15,6 +15,8 @@ Artifacts:
 - `coverage-manifest.json` — every critical seam and its honest D1-only state.
 - `neutral-replay.schema.json` — the implementation-neutral export wire consumed
   by the independent replay checker.
+- `lifecycle-probes.json` — the pinned lifecycle/isolation claims, invalidators,
+  and complete synthetic probe registry.
 - `fixtures/cases.json` — policy compilation, decision, audit, revoke, and
   lifecycle differential cases.
 - `conformance/conformance_test.go` — implementation-independent fixture and
