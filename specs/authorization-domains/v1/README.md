@@ -11,6 +11,9 @@ the fixture documents.
 Artifacts:
 
 - `contract.md` — normative semantics and type contracts.
+- `fleet-permission-map-delta.md` — design proposal for closed capability
+  classes, exact-seat standing grants, scoped entryway denial, and its
+  operator-inspectable projection.
 - `action-registry.json` — the complete initial worker action registry (`read`).
 - `coverage-manifest.json` — every critical seam and its honest D1-only state.
 - `domain-context-cases.json` — server-mint, override rejection, and same-principal
