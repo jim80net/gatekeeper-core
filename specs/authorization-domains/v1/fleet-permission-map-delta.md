@@ -319,4 +319,3 @@ adds no fixtures and makes no conformance or enforcement claim.
 2. **Maximum lifetime:** Must every standing grant have a finite operator-set
    maximum duration, and if so what is it? This draft requires a finite
    `expires_at` but does not invent a duration or renewal rule.
-
