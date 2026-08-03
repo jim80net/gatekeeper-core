@@ -8,7 +8,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
@@ -20,20 +19,9 @@ import (
 	"github.com/jim80net/gatekeeper-core/config"
 )
 
-// CompiledRule is a rule with pre-compiled regex patterns.
-type CompiledRule struct {
-	ToolRegex         *regexp2.Regexp
-	InputRegex        *regexp2.Regexp
-	PreconditionCmd   string
-	PreconditionRegex *regexp2.Regexp
-	Decision          canonical.Decision
-	Reason            string
-	Provenance        canonical.RuleProvenance
-}
-
 // Engine evaluates rules and returns permission decisions.
 type Engine struct {
-	rules []CompiledRule
+	rules []config.CompiledRule
 	debug bool
 	// execCommand is overridable for testing preconditions.
 	// toolInput is the (heredoc-stripped) tool input string, also exposed to
@@ -47,60 +35,13 @@ func (e *Engine) SetExecCommand(fn func(ctx context.Context, cwd, command, toolI
 	e.execCommand = fn
 }
 
-// New compiles all rules and returns an Engine.
+// New constructs an Engine only from rules admitted and compiled by config.
 func New(cfg *config.Config, debug bool) (*Engine, error) {
-	rules := make([]CompiledRule, 0, len(cfg.Rules))
-	for i, r := range cfg.Rules {
-		toolRe, err := regexp2.Compile(r.Tool, regexp2.None)
-		if err != nil {
-			return nil, fmt.Errorf("rule %d: invalid tool regex %q: %w", i, r.Tool, err)
-		}
-		inputRe, err := regexp2.Compile(r.Input, regexp2.None)
-		if err != nil {
-			return nil, fmt.Errorf("rule %d: invalid input regex %q: %w", i, r.Input, err)
-		}
-
-		var precondRe *regexp2.Regexp
-		if r.PreconditionMatch != "" {
-			precondRe, err = regexp2.Compile(r.PreconditionMatch, regexp2.None)
-			if err != nil {
-				return nil, fmt.Errorf("rule %d: invalid precondition_match regex %q: %w", i, r.PreconditionMatch, err)
-			}
-		}
-
-		decision, err := parseDecision(r.Decision)
-		if err != nil {
-			return nil, fmt.Errorf("rule %d: %w", i, err)
-		}
-
-		rules = append(rules, CompiledRule{
-			ToolRegex:         toolRe,
-			InputRegex:        inputRe,
-			PreconditionCmd:   r.Precondition,
-			PreconditionRegex: precondRe,
-			Decision:          decision,
-			Reason:            r.Reason,
-			Provenance: canonical.RuleProvenance{
-				Source: r.Source,
-				Index:  r.SourceIndex,
-			},
-		})
+	rules, err := cfg.CompiledRules()
+	if err != nil {
+		return nil, err
 	}
 	return &Engine{rules: rules, debug: debug, execCommand: defaultExecCommand}, nil
-}
-
-// parseDecision maps a rule's decision string to a canonical decision. A rule
-// may only allow or deny; "abstain" is not a valid rule outcome (it is the
-// no-match default).
-func parseDecision(s string) (canonical.Decision, error) {
-	switch s {
-	case "allow":
-		return canonical.Allow, nil
-	case "deny":
-		return canonical.Deny, nil
-	default:
-		return canonical.Abstain, fmt.Errorf("invalid decision %q (must be \"allow\" or \"deny\")", s)
-	}
 }
 
 // Evaluate checks all rules against a canonical tool call and returns a verdict.

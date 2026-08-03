@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/jim80net/gatekeeper-core/canonical"
@@ -218,6 +219,9 @@ func Load(projectDir string) (*Config, error) {
 	if err := loadLayer("project", resolveProjectPath(projectDir)); err != nil {
 		return nil, err
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validating merged config: %w", err)
+	}
 
 	canonical.Debugf("total rules: %d, on_error=%q", len(cfg.Rules), cfg.effectiveOnError())
 	return cfg, nil
@@ -262,8 +266,16 @@ func LoadFile(path string) (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	metadata, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
+		fields := make([]string, 0, len(undecoded))
+		for _, key := range undecoded {
+			fields = append(fields, key.String())
+		}
+		return nil, fmt.Errorf("parsing %s: unknown TOML field(s): %s", path, strings.Join(fields, ", "))
 	}
 	source, err := canonicalConfigPath(path)
 	if err != nil {
@@ -272,6 +284,9 @@ func LoadFile(path string) (*Config, error) {
 	for i := range cfg.Rules {
 		cfg.Rules[i].Source = source
 		cfg.Rules[i].SourceIndex = i + 1
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validating %s: %w", path, err)
 	}
 	return &cfg, nil
 }
