@@ -202,7 +202,7 @@ EntrywayAuthzDecision {
   entryway_id, action, seat_id
   grant_id?: string
   evaluated_constraints
-  lease_not_after: RFC3339
+  lease: { not_after: RFC3339, max_effects: 1 }
   decision_id, decided_at
 }
 ```
@@ -212,6 +212,17 @@ identity resolution. Model text, prompts, environment variables, roster display
 names, tool arguments, and caller-provided seat or class claims are untrusted
 evidence and MUST NOT select authority. The decision binds the exact resolved
 seat and current map generation; a decision is not itself entryway authority.
+
+Every permitted standing-grant decision authorizes exactly one final-PEP effect
+before `lease.not_after`. `max_effects` MUST equal `1` in this version. The
+action-specific effect is one credential-byte materialization for `read`, one
+outbound network request attempt for `network_egress`, or one submitted
+external state-changing operation attempt for `credentialed_effect`. A retry,
+redirect, second request, or second mutation attempt is another effect and
+requires a fresh request, decision, durable audit admission, and replay claim.
+The final PEP MUST atomically claim `(decision_id, pep_id, effect_ordinal = 1)`
+and reject a second claim. A standing grant may yield later fresh decisions; a
+single decision never authorizes a window of repeated use.
 
 Evaluation is deterministic:
 
@@ -250,9 +261,12 @@ final PEP and independently exercised negative bypass evidence.
 
 ## 6. Operator-inspectable projection
 
-The authoritative map remains the signed immutable artifact. A dashboard MAY
-consume only this read-only projection, produced by a trusted reader of an
-admitted map and registry generation:
+The authoritative map remains the immutable generation-chained artifact. Its
+digest and CAS detect corruption and lost updates, while `issued_by` records a
+claimed issuer; this version does not cryptographically authenticate that
+issuer or protect against deliberate rewriting by an artifact writer. A
+dashboard MAY consume only this read-only projection, produced by a trusted
+reader of an admitted map and registry generation:
 
 ```text
 FleetPermissionMapProjection {
@@ -319,3 +333,7 @@ adds no fixtures and makes no conformance or enforcement claim.
 2. **Maximum lifetime:** Must every standing grant have a finite operator-set
    maximum duration, and if so what is it? This draft requires a finite
    `expires_at` but does not invent a duration or renewal rule.
+3. **Artifact authentication:** Must permission-map generations carry a
+   cryptographic signature, and if so which signer authority, algorithm, key
+   reference, and canonical signed payload are required? This draft claims
+   digest-chain integrity and CAS only; it makes no issuer-authentication claim.
