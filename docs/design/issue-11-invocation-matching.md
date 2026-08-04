@@ -127,8 +127,10 @@ operation. It cannot honestly replace shell parsing for the existing Bash tool.
 
 Adopt option A as a versioned canonical shell-plan contract, not as another
 engine prefilter. The adapters should continue only to translate harness wire
-formats. A harness-neutral canonicalizer should parse the Bash string once and
-emit an execution graph containing:
+formats. The proposed parser is `mvdan.cc/sh/v3/syntax` in Bash mode, pinned to
+an exact module version recorded in `ShellPlan.parser_version`. A
+harness-neutral canonicalizer should parse the Bash string once and emit an
+execution graph containing:
 
 ```text
 ShellPlan {
@@ -165,9 +167,18 @@ being governed, such as a `Read` path.
 Wrapper handling must be closed and versioned. Literal bodies for admitted
 wrappers such as `sh -c` and `eval` are recursively parsed; dynamic bodies,
 unknown wrappers, dynamic command words, and opaque execution handoffs produce
-`opaque_exec`, which is denied by policy. `base64 -d | sh` is opaque and denied,
-not decoded speculatively. This conservative rule prevents the recommended
-design from silently opening the evasions that parsing cannot resolve.
+`opaque_exec`, whose eventual policy denial is governed by the mandatory staged
+rollout below. `base64 -d | sh` is opaque and is not decoded speculatively. Once
+enforcement is gated on, it denies rather than silently opening an evasion that
+parsing cannot resolve.
+
+The parser is security attack surface. A parser/real-shell disagreement can
+hide a destructive invocation even when policy evaluation is otherwise
+correct. Parser upgrades require a new `parser_version`, review, and
+differential fixtures against the fleet's supported shell versions. Unsupported
+syntax, parse ambiguity, and any known parser/shell disagreement produce a
+distinct opaque classification; they MUST NOT become a partial plan that is
+treated as ordinary safe work.
 
 ## Interaction with existing behavior
 
@@ -190,6 +201,69 @@ design from silently opening the evasions that parsing cannot resolve.
   tool call; data arguments on one node cannot manufacture an invocation node.
 - **Deny wins:** unchanged. An allow on one invocation cannot erase a deny on
   another invocation in the same shell plan.
+
+## Mandatory staged rollout for opaque execution
+
+Opaque classification and opaque denial MUST NOT ship together. The rollout is
+an ordered gate:
+
+### Stage 1: shadow classification
+
+The canonicalizer emits `opaque_exec` records, but those records do not change
+the existing verdict. Shadow mode records classification metadata and the
+exact binary version, source ref, parser version, policy digest, seat ID, and
+non-secret source-span digest; it MUST NOT record raw commands, arguments,
+credentials, or payload bodies. Shadow mode makes no protection claim.
+
+Shadow measurement is a mandatory precondition of enforcement. It runs for at
+least seven consecutive representative fleet-work days, covers at least 90% of
+seats active during that window, and observes at least 10,000 Bash tool calls.
+Restarting or materially changing the parser, classifier, wrapper registry, or
+policy restarts the measurement window against the new exact artifact.
+
+For each opaque class, the report MUST state both event count and rate per Bash
+tool call, affected-seat count and rate, and a reviewed classification of the
+common cases as legitimate fleet work, suspicious activity, or unresolved:
+
+| reason code | construct measured |
+| --- | --- |
+| `opaque_dynamic_command_word` | variable, substitution, alias, function, or other non-literal command identity |
+| `opaque_unknown_wrapper` | an executable handoff whose argv/body contract is not in the admitted wrapper registry |
+| `opaque_dynamic_interpreter_body` | non-literal `eval`, `sh -c`, or equivalent interpreter input |
+| `opaque_encoded_handoff` | decoded, generated, piped, or otherwise transformed content handed to an executor |
+| `opaque_parser_disagreement` | unsupported syntax, ambiguity, or parser/supported-shell disagreement |
+
+### Stage 2: close common legitimate cases and repeat shadow
+
+If legitimate uses dominate any opaque class, enforcement is blocked. The
+admitted-wrapper or canonicalization contract must first expand to cover the
+legitimate majority without decoding or executing attacker-controlled content,
+then the complete shadow window repeats under the successor versions. A broad
+exception such as “allow this seat's opaque commands” is not an admitted
+wrapper and cannot satisfy this stage.
+
+### Stage 3: explicit enforcement gate
+
+Opaque denial may be proposed only when a completed shadow report shows all of
+the following at one exact artifact generation:
+
+- the remaining legitimate opaque rate is at most 0.1% of Bash calls;
+- remaining legitimate opacity affects at most 1% of active seats;
+- no known required fleet workflow remains opaque; and
+- every unresolved or suspicious class has a reviewed deny reason and an
+  independently observed negative control.
+
+Failure of any criterion returns the design to Stage 2; it does not permit a
+best-effort launch. Crossing the threshold requires an explicit policy gate and
+a separately verified rollback/deactivation path. Shadow success alone never
+arms denial.
+
+When enforcement is eventually authorized, the denial message MUST include the
+specific reason code above, the unresolvable construct category, and a safe
+source location such as invocation ID/source span. A generic “opaque execution”
+or “policy denied” message is non-conforming. Messages MUST explain what could
+not be resolved without echoing the opaque command or payload. This preserves
+actionability without leaking the content being gated.
 
 ## Required evidence before implementation can merge
 
@@ -218,12 +292,19 @@ fleet binary is 1.5.1 and is not evidence for a future implementation branch.
    recovered error.
 5. Run the same canonical fixtures through every adapter. Their emitted
    `ShellPlan` source digest and invocation graph MUST agree exactly.
+6. Plant every opaque reason class and prove shadow mode records without
+   enforcing it. Separately plant the enforcement switch and prove each class
+   denies with its own reason code. Evidence from either stage MUST name the
+   exact binary, source ref, parser version, policy digest, and rollout stage.
 
 ## Known residual
 
 Static parsing cannot prove the runtime identity of code hidden behind dynamic
 shell state or a general-purpose interpreter. The recommendation contains that
-residual by denying unresolved execution rather than pretending to recognize
-it. It will reject some legitimate dynamic shell programs. That conservative
-false positive is preferable to an invisible destructive false negative and
-must remain visible in reason codes and operator documentation.
+residual first by measuring it and expanding admitted semantics for common
+legitimate cases, then—only after the quantitative exit gate—by denying what
+remains unresolved rather than pretending to recognize it. Enforcement will
+still reject some legitimate dynamic shell programs. That measured,
+specifically explained false positive is preferable to an invisible
+destructive false negative and must remain visible in reason codes and operator
+documentation.
