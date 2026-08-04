@@ -184,6 +184,7 @@ EntrywayAuthzRequest {
   schema_version, request_id
   domain_context: DomainContext
   seat_id: exact server-resolved stable seat identity
+  identity_source: { source_id, binding_generation, binding_digest }
   action: version-2 worker action
   entryway: { entryway_id, registry_digest }
   object?: { object_id, canonicalization_version }
@@ -200,6 +201,7 @@ EntrywayAuthzDecision {
   permission_map_generation
   registry_digest
   entryway_id, action, seat_id
+  identity_source: { source_id, binding_generation, binding_digest }
   grant_id?: string
   evaluated_constraints
   lease: { not_after: RFC3339, max_effects: 1 }
@@ -208,10 +210,34 @@ EntrywayAuthzDecision {
 ```
 
 The trusted ingress obtains `seat_id` from authenticated server-side fleet
-identity resolution. Model text, prompts, environment variables, roster display
-names, tool arguments, and caller-provided seat or class claims are untrusted
-evidence and MUST NOT select authority. The decision binds the exact resolved
-seat and current map generation; a decision is not itself entryway authority.
+identity resolution. The identity source MUST be selected by an immutable
+binding admitted by the same authority and generation discipline that govern
+policy admission. That binding fixes the source location before the worker or
+request runtime begins. The policy authority MAY configure the location by
+publishing a binding successor; runtime path discovery is forbidden.
+
+An environment variable, working directory, caller argument, model output,
+search path, fallback directory, or other runtime-discoverable input MUST NOT
+select or redirect the identity source. This is a general trust rule: an input
+that selects the source of authority evidence is itself authority evidence and
+inherits the same admission, provenance, immutability, and integrity
+requirements as the selected content. Every alias, indirection, or fallback
+that can change which source is read is part of that selection and MUST be
+fixed by the admitted binding rather than discovered at runtime.
+
+Model text, prompts, environment variables, roster display names, tool
+arguments, and caller-provided seat or class claims remain untrusted evidence
+and MUST NOT select authority. If identity was obtained through a discoverable,
+unbound, stale, ambiguous, or caller-influenceable source location, `seat_id`
+is unresolved regardless of the source's contents. The named credentialed-
+entryway effect MUST return `deny_entryway`; unrelated ordinary work remains
+open, and the failed resolution MUST NOT cause the entryway to be reclassified
+as ordinary.
+
+The request and decision carry only the stable source ID and immutable binding
+generation/digest, never its path. The decision binds the exact resolved seat,
+identity-source binding, and current map generation; a decision is not itself
+entryway authority.
 
 Every permitted standing-grant decision authorizes exactly one final-PEP effect
 before `lease.not_after`. `max_effects` MUST equal `1` in this version. The
@@ -244,9 +270,14 @@ The controlling PEP is the last trusted component at which credential material
 would be materialized or credential-backed/search network egress or an external
 effect would occur. It MUST enforce the server-resolved seat, exact entryway,
 action, registry digest, current permission-map generation, active grant,
-decision binding, durable-before-effect audit, and replay/lease constraints.
-Unavailable audit, replay, registry, map, or final-PEP state denies only the
-named credentialed-entryway effect.
+decision binding, admitted identity-source binding, durable-before-effect
+audit, and replay/lease constraints. A final PEP MUST reject a seat resolution
+whose source ID, binding generation, or binding digest is absent, stale,
+mismatched, discovered at runtime, or supplied by the caller. It MUST NOT trust
+a bare `seat_id` or re-resolve identity through an environment-selected,
+working-directory-relative, caller-selected, or fallback path. Unavailable
+identity binding, audit, replay, registry, map, or final-PEP state denies only
+the named credentialed-entryway effect.
 
 Tool names, command strings, argument patterns, input regular expressions, and
 prompt classifiers MAY provide defense in depth but MUST NOT be the controlling
@@ -316,13 +347,31 @@ specific defect it exists to catch. Future conformance work for this delta MUST
 use an independent oracle and include, at minimum, negative controls for an
 unauthorized exact seat, a revoked-grant use, an expired grant, a caller-claimed
 seat substitution, an unknown entryway, an entryway removed from a successor
-registry, a stale map generation, and a bypass around each final PEP. At least
-one planted unauthorized grant and one planted revoked-grant attempt MUST fail
-before the corresponding positive evidence can support a gate.
+registry, a stale map generation, an environment-selected identity-source path,
+a working-directory-relative identity-source resolution, and a bypass around
+each final PEP. The two identity-source controls MUST plant valid-looking seat
+content at the untrusted location and prove that source selection alone causes
+denial. At least one planted unauthorized grant and one planted revoked-grant
+attempt MUST fail before the corresponding positive evidence can support a
+gate.
 
 Production evaluator, classifier, canonicalizer, registry, projection, or PEP
 code MUST NOT be imported or restated by the oracle that judges it. This design
 adds no fixtures and makes no conformance or enforcement claim.
+
+### 7.1 Residual implementation and authority gap
+
+This amendment constrains the design; it does not close the product hole.
+Existing fleet roster discovery that consults environment variables, the
+working directory, or fallback locations is not a conforming identity source
+for credentialed-entryway decisions and requires separate flotilla-owned
+implementation work. This contract does not change that product, choose a
+canonical roster path, or authorize a deployment.
+
+The authority allowed to admit the fixed source binding and to write the
+canonical roster remains unresolved. Until those authorities and the binding
+mechanism are specified and implemented, no runtime protection or trusted-seat
+resolution claim may rely on this amendment.
 
 ## 8. Questions requiring operator resolution before ratification
 
