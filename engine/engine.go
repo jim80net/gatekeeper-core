@@ -10,7 +10,6 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -24,7 +23,7 @@ type Engine struct {
 	rules []config.CompiledRule
 	debug bool
 	// execCommand is overridable for testing preconditions.
-	// toolInput is the (heredoc-stripped) tool input string, also exposed to
+	// toolInput is the policy match input string, also exposed to
 	// the shell as GATEKEEPER_INPUT so preconditions can inspect the command
 	// (e.g. parse --repo against the worktree's authority domain).
 	execCommand func(ctx context.Context, cwd, command, toolInput string) (string, error)
@@ -63,13 +62,13 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 		}
 	}
 
-	// For Bash commands, strip heredoc bodies so deny rules don't match
-	// against data content (e.g., commit messages mentioning "rm -rf").
+	// Prepare Bash heredocs for policy matching. StripHeredocs currently
+	// preserves every body fail-closed until data use can be proved positively.
 	matchStr := inputStr
 	if tc.Tool == canonical.ToolBash {
 		matchStr = StripHeredocs(inputStr)
 		if e.debug && matchStr != inputStr {
-			canonical.Debugf("  stripped heredocs: %q", matchStr)
+			canonical.Debugf("  normalized heredocs: %q", matchStr)
 		}
 	}
 
@@ -89,7 +88,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 			continue
 		}
 
-		// Check precondition if present. matchStr (heredoc-stripped for Bash)
+		// Check precondition if present. matchStr (heredoc-normalized for Bash)
 		// is exported to the shell as GATEKEEPER_INPUT.
 		if rule.PreconditionCmd != "" {
 			if !e.checkPrecondition(rule.PreconditionCmd, rule.PreconditionRegex, tc.CWD, cdPrefix, matchStr) {
@@ -157,7 +156,7 @@ func (e *Engine) checkPrecondition(cmd string, matchRe *regexp2.Regexp, cwd stri
 }
 
 // EnvGatekeeperInput is the environment variable set for every precondition
-// shell. Value is the (heredoc-stripped) tool input string under evaluation.
+// shell. Value is the policy match input string under evaluation.
 const EnvGatekeeperInput = "GATEKEEPER_INPUT"
 
 func defaultExecCommand(ctx context.Context, cwd, command, toolInput string) (string, error) {
@@ -185,55 +184,12 @@ func ExtractCDPrefix(command string) string {
 	return ""
 }
 
-// heredocStartRe matches heredoc markers: <<EOF, <<'EOF', <<"EOF", <<-EOF, etc.
-var heredocStartRe = regexp.MustCompile(`<<-?\s*(?:'(\w+)'|"(\w+)"|(\w+))`)
-
-// shellHeredocRe matches a shell interpreter receiving a heredoc as stdin.
-// This detects patterns like: bash <<'EOF', sh <<EOF, python <<'EOF', etc.
-// These heredocs contain executable code and must NOT be stripped.
-var shellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:bash|sh|dash|zsh|ksh|fish|python[23]?|ruby|perl|node|php)\s+<<`)
-
-// StripHeredocs removes heredoc bodies from a Bash command string.
-// This prevents deny rules from matching against data content such as
-// commit messages or PR descriptions that happen to contain denied patterns.
-// However, heredocs fed as stdin to shell interpreters (bash, sh, python, etc.)
-// are preserved because they contain executable code that deny rules must check.
+// StripHeredocs returns the complete Bash command until the engine has a
+// positive, structural proof that a particular heredoc body is data rather
+// than executable input. Interpreter names and wrappers are open sets; stripping
+// by default makes every deny blind to an omitted executable consumer. The
+// conservative identity behavior may create false denies for prose heredocs,
+// but cannot create a false allow.
 func StripHeredocs(command string) string {
-	lines := strings.Split(command, "\n")
-	var result []string
-	var delim string
-	keepBody := false
-
-	for _, line := range lines {
-		if delim != "" {
-			if keepBody {
-				result = append(result, line)
-			}
-			// Inside a heredoc body — skip/keep lines until closing delimiter.
-			if strings.TrimSpace(line) == delim {
-				delim = ""
-				keepBody = false
-			}
-			continue
-		}
-
-		// Check if this line introduces a heredoc.
-		if m := heredocStartRe.FindStringSubmatch(line); m != nil {
-			// Capture group 1, 2, or 3 holds the delimiter word.
-			for _, g := range m[1:] {
-				if g != "" {
-					delim = g
-					break
-				}
-			}
-			// If a shell interpreter is receiving this heredoc, keep the body.
-			if delim != "" && shellHeredocRe.MatchString(line) {
-				keepBody = true
-			}
-		}
-
-		result = append(result, line)
-	}
-
-	return strings.Join(result, "\n")
+	return command
 }
