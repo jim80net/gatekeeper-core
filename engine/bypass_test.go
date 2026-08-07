@@ -122,11 +122,10 @@ func TestBarePushOnMainDenied(t *testing.T) {
 	})
 }
 
-// TestWrappedExecutableHeredocCannotHideDeny reproduces the live composition:
-// an allow for the timeout wrapper must not override a deny hidden inside an
-// interpreter heredoc. Wrapper identity is deliberately varied because it is
-// an open class; executable-heredoc classification must not enumerate it.
-func TestWrappedExecutableHeredocCannotHideDeny(t *testing.T) {
+// TestHeredocCannotHideDeny reproduces the live composition: an allow for a
+// wrapper must not override a deny hidden inside a heredoc. Both wrappers and
+// executable consumers are open classes, so safety must not enumerate either.
+func TestHeredocCannotHideDeny(t *testing.T) {
 	eng := defaultEngine(t, "feature-branch")
 	denied := []string{
 		"timeout 5 python <<'EOF'\nrm -rf /\nEOF",
@@ -134,6 +133,8 @@ func TestWrappedExecutableHeredocCannotHideDeny(t *testing.T) {
 		"sudo python <<'EOF'\nrm -rf /\nEOF",
 		"env FOO=bar python <<'EOF'\nrm -rf /\nEOF",
 		"nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\nrm -rf /\nEOF",
+		"bun <<'EOF'\nrm -rf /\nEOF",
+		"timeout 5 tclsh <<'EOF'\nrm -rf /\nEOF",
 	}
 	for _, command := range denied {
 		t.Run(command, func(t *testing.T) {
@@ -155,7 +156,7 @@ func TestWrappedExecutableHeredocCannotHideDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verdict.Decision != canonical.Allow {
-		t.Fatalf("data heredoc must remain stripped: decision=%s reason=%q", verdict.Decision, verdict.Reason)
+	if verdict.Decision != canonical.Deny {
+		t.Fatalf("unclassified data heredoc must fail closed: decision=%s reason=%q", verdict.Decision, verdict.Reason)
 	}
 }

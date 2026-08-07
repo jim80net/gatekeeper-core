@@ -10,7 +10,6 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -24,7 +23,7 @@ type Engine struct {
 	rules []config.CompiledRule
 	debug bool
 	// execCommand is overridable for testing preconditions.
-	// toolInput is the (heredoc-stripped) tool input string, also exposed to
+	// toolInput is the policy match input string, also exposed to
 	// the shell as GATEKEEPER_INPUT so preconditions can inspect the command
 	// (e.g. parse --repo against the worktree's authority domain).
 	execCommand func(ctx context.Context, cwd, command, toolInput string) (string, error)
@@ -63,13 +62,13 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 		}
 	}
 
-	// For Bash commands, strip heredoc bodies so deny rules don't match
-	// against data content (e.g., commit messages mentioning "rm -rf").
+	// Prepare Bash heredocs for policy matching. StripHeredocs currently
+	// preserves every body fail-closed until data use can be proved positively.
 	matchStr := inputStr
 	if tc.Tool == canonical.ToolBash {
 		matchStr = StripHeredocs(inputStr)
 		if e.debug && matchStr != inputStr {
-			canonical.Debugf("  stripped heredocs: %q", matchStr)
+			canonical.Debugf("  normalized heredocs: %q", matchStr)
 		}
 	}
 
@@ -89,7 +88,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 			continue
 		}
 
-		// Check precondition if present. matchStr (heredoc-stripped for Bash)
+		// Check precondition if present. matchStr (heredoc-normalized for Bash)
 		// is exported to the shell as GATEKEEPER_INPUT.
 		if rule.PreconditionCmd != "" {
 			if !e.checkPrecondition(rule.PreconditionCmd, rule.PreconditionRegex, tc.CWD, cdPrefix, matchStr) {
@@ -157,7 +156,7 @@ func (e *Engine) checkPrecondition(cmd string, matchRe *regexp2.Regexp, cwd stri
 }
 
 // EnvGatekeeperInput is the environment variable set for every precondition
-// shell. Value is the (heredoc-stripped) tool input string under evaluation.
+// shell. Value is the policy match input string under evaluation.
 const EnvGatekeeperInput = "GATEKEEPER_INPUT"
 
 func defaultExecCommand(ctx context.Context, cwd, command, toolInput string) (string, error) {
@@ -185,208 +184,12 @@ func ExtractCDPrefix(command string) string {
 	return ""
 }
 
-// heredocStartRe matches heredoc markers: <<EOF, <<'EOF', <<"EOF", <<-EOF, etc.
-var heredocStartRe = regexp.MustCompile(`<<-?\s*(?:'(\w+)'|"(\w+)"|(\w+))`)
-
-// executableInterpreters names commands whose heredoc input is executable code.
-// The receiver may appear after any number of wrapper words (timeout, sudo,
-// env, nice, full paths, or wrappers unknown to Gatekeeper), so classification
-// deliberately does not enumerate wrappers.
-var executableInterpreters = map[string]struct{}{
-	"bash": {}, "sh": {}, "dash": {}, "zsh": {}, "ksh": {}, "fish": {},
-	"python": {}, "python2": {}, "python3": {},
-	"ruby": {}, "perl": {}, "node": {}, "php": {},
-}
-
-// executableHeredoc reports whether the current simple command contains a
-// known interpreter before its heredoc redirection. Looking at every shell word
-// rather than only the command-position word is intentionally conservative:
-// wrappers are an open class and may transfer execution to any later argv.
-func executableHeredoc(header string) bool {
-	segment := currentSimpleCommand(header)
-	for _, word := range shellWords(segment) {
-		if slash := strings.LastIndexByte(word, '/'); slash >= 0 {
-			word = word[slash+1:]
-		}
-		if isExecutableInterpreter(word) {
-			return true
-		}
-	}
-	return false
-}
-
-func isExecutableInterpreter(word string) bool {
-	if _, ok := executableInterpreters[word]; ok {
-		return true
-	}
-	for _, prefix := range []string{"python", "ruby", "node", "php"} {
-		if !strings.HasPrefix(word, prefix) {
-			continue
-		}
-		suffix := strings.TrimPrefix(word, prefix)
-		if suffix == "" {
-			return true
-		}
-		hasDigit := false
-		valid := true
-		for _, ch := range suffix {
-			if ch >= '0' && ch <= '9' {
-				hasDigit = true
-				continue
-			}
-			if ch != '.' {
-				valid = false
-				break
-			}
-		}
-		if valid && hasDigit {
-			return true
-		}
-	}
-	return false
-}
-
-// currentSimpleCommand drops completed commands without treating separators
-// inside quotes as syntax. The returned suffix ends immediately before the
-// heredoc operator supplied by the caller.
-func currentSimpleCommand(header string) string {
-	start := 0
-	var quote byte
-	escaped := false
-	for i := 0; i < len(header); i++ {
-		ch := header[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if quote == '\'' {
-			if ch == '\'' {
-				quote = 0
-			}
-			continue
-		}
-		if ch == '\\' {
-			escaped = true
-			continue
-		}
-		if quote == '"' {
-			if ch == '"' {
-				quote = 0
-			}
-			continue
-		}
-		if ch == '\'' || ch == '"' {
-			quote = ch
-			continue
-		}
-		if strings.ContainsRune(";&|()`\n", rune(ch)) {
-			start = i + 1
-		}
-	}
-	return header[start:]
-}
-
-// shellWords performs the limited shell lexical operation needed here: split
-// unquoted whitespace, remove quoting, and honor backslash escapes. It does not
-// execute or expand input.
-func shellWords(input string) []string {
-	var words []string
-	var word strings.Builder
-	var quote byte
-	escaped := false
-	flush := func() {
-		if word.Len() > 0 {
-			words = append(words, word.String())
-			word.Reset()
-		}
-	}
-	for i := 0; i < len(input); i++ {
-		ch := input[i]
-		if escaped {
-			word.WriteByte(ch)
-			escaped = false
-			continue
-		}
-		if quote == '\'' {
-			if ch == '\'' {
-				quote = 0
-			} else {
-				word.WriteByte(ch)
-			}
-			continue
-		}
-		if ch == '\\' {
-			escaped = true
-			continue
-		}
-		if quote == '"' {
-			if ch == '"' {
-				quote = 0
-			} else {
-				word.WriteByte(ch)
-			}
-			continue
-		}
-		if ch == '\'' || ch == '"' {
-			quote = ch
-			continue
-		}
-		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
-			flush()
-			continue
-		}
-		word.WriteByte(ch)
-	}
-	if escaped {
-		word.WriteByte('\\')
-	}
-	flush()
-	return words
-}
-
-// StripHeredocs removes heredoc bodies from a Bash command string.
-// This prevents deny rules from matching against data content such as
-// commit messages or PR descriptions that happen to contain denied patterns.
-// However, heredocs fed as stdin to shell interpreters (bash, sh, python, etc.)
-// are preserved because they contain executable code that deny rules must check.
+// StripHeredocs returns the complete Bash command until the engine has a
+// positive, structural proof that a particular heredoc body is data rather
+// than executable input. Interpreter names and wrappers are open sets; stripping
+// by default makes every deny blind to an omitted executable consumer. The
+// conservative identity behavior may create false denies for prose heredocs,
+// but cannot create a false allow.
 func StripHeredocs(command string) string {
-	lines := strings.Split(command, "\n")
-	var result []string
-	var delim string
-	keepBody := false
-
-	for _, line := range lines {
-		if delim != "" {
-			if keepBody {
-				result = append(result, line)
-			}
-			// Inside a heredoc body — skip/keep lines until closing delimiter.
-			if strings.TrimSpace(line) == delim {
-				delim = ""
-				keepBody = false
-			}
-			continue
-		}
-
-		// Check if this line introduces a heredoc.
-		if m := heredocStartRe.FindStringSubmatch(line); m != nil {
-			// Capture group 1, 2, or 3 holds the delimiter word.
-			for _, g := range m[1:] {
-				if g != "" {
-					delim = g
-					break
-				}
-			}
-			// If an interpreter is receiving this heredoc, keep the body. The
-			// interpreter may sit behind any number of wrapper words.
-			heredocOffset := strings.Index(line, m[0])
-			if delim != "" && heredocOffset >= 0 && executableHeredoc(line[:heredocOffset]) {
-				keepBody = true
-			}
-		}
-
-		result = append(result, line)
-	}
-
-	return strings.Join(result, "\n")
+	return command
 }

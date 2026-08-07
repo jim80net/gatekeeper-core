@@ -252,22 +252,22 @@ func TestStripHeredocs(t *testing.T) {
 		{
 			name:    "unquoted heredoc",
 			command: "git commit -m \"$(cat <<EOF\nThis mentions rm -rf dist\nEOF\n)\"",
-			want:    "git commit -m \"$(cat <<EOF\n)\"",
+			want:    "git commit -m \"$(cat <<EOF\nThis mentions rm -rf dist\nEOF\n)\"",
 		},
 		{
 			name:    "single-quoted heredoc",
 			command: "git commit -m \"$(cat <<'EOF'\nrm -rf /tmp/stuff\ngit reset --hard\nEOF\n)\"",
-			want:    "git commit -m \"$(cat <<'EOF'\n)\"",
+			want:    "git commit -m \"$(cat <<'EOF'\nrm -rf /tmp/stuff\ngit reset --hard\nEOF\n)\"",
 		},
 		{
 			name:    "double-quoted heredoc",
 			command: "gh pr create --body \"$(cat <<\"EOF\"\nDROP TABLE users\nEOF\n)\"",
-			want:    "gh pr create --body \"$(cat <<\"EOF\"\n)\"",
+			want:    "gh pr create --body \"$(cat <<\"EOF\"\nDROP TABLE users\nEOF\n)\"",
 		},
 		{
 			name:    "heredoc with dash",
 			command: "cat <<-MARKER\n\tindented content with rm -rf\nMARKER",
-			want:    "cat <<-MARKER",
+			want:    "cat <<-MARKER\n\tindented content with rm -rf\nMARKER",
 		},
 		{
 			name:    "multiline command without heredoc",
@@ -277,7 +277,7 @@ func TestStripHeredocs(t *testing.T) {
 		{
 			name:    "command after heredoc preserved",
 			command: "cat <<EOF\nheredoc body\nEOF\necho after",
-			want:    "cat <<EOF\necho after",
+			want:    "cat <<EOF\nheredoc body\nEOF\necho after",
 		},
 		{
 			name:    "bash heredoc preserved",
@@ -320,14 +320,14 @@ func TestStripHeredocs(t *testing.T) {
 			want:    "nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\nrm -rf /\nEOF",
 		},
 		{
-			name:    "cat heredoc still stripped",
+			name:    "unknown heredoc consumer preserved",
 			command: "cat <<'EOF'\nrm -rf /\nEOF",
-			want:    "cat <<'EOF'",
+			want:    "cat <<'EOF'\nrm -rf /\nEOF",
 		},
 		{
-			name:    "interpreter in completed command does not preserve later data heredoc",
+			name:    "completed command does not weaken later heredoc preservation",
 			command: "echo python; cat <<'EOF'\nrm -rf /\nEOF",
-			want:    "echo python; cat <<'EOF'",
+			want:    "echo python; cat <<'EOF'\nrm -rf /\nEOF",
 		},
 	}
 
@@ -341,7 +341,7 @@ func TestStripHeredocs(t *testing.T) {
 	}
 }
 
-func TestHeredocContentDoesNotTriggerDeny(t *testing.T) {
+func TestHeredocContentFailsClosedUntilDataClassification(t *testing.T) {
 	eng := newEngine(t, []config.Rule{
 		{Tool: "Bash", Input: `\brm\s+(-[a-zA-Z]*r|--recursive)`, Decision: "deny", Reason: "recursive delete"},
 		{Tool: "Bash", Input: `git\s+reset\s+--hard`, Decision: "deny", Reason: "hard reset"},
@@ -358,7 +358,7 @@ func TestHeredocContentDoesNotTriggerDeny(t *testing.T) {
 		{
 			name: "commit message mentioning rm -rf",
 			cmd:  "git commit -m \"$(cat <<'EOF'\nfeat: allow rm -rf on build dirs\nEOF\n)\"",
-			want: canonical.Allow,
+			want: canonical.Deny,
 		},
 		{
 			name: "PR body mentioning DROP TABLE",
@@ -368,7 +368,7 @@ func TestHeredocContentDoesNotTriggerDeny(t *testing.T) {
 		{
 			name: "commit message mentioning git reset --hard",
 			cmd:  "git commit -m \"$(cat <<'EOF'\nRevert git reset --hard behavior\nEOF\n)\"",
-			want: canonical.Allow,
+			want: canonical.Deny,
 		},
 		{
 			name: "actual rm -rf still denied",
