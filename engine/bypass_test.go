@@ -126,6 +126,18 @@ func TestForcePushFlagPositionBypassesDenied(t *testing.T) {
 		"git push origin main -f",
 		"git push -u origin feature -f",
 		"cd /tmp && git push origin main --force",
+		"git -C /tmp push origin feature -f",
+		"git --no-pager push origin feature --force",
+		"git push origin feature \\\n -f",
+		"git push origin feature '--force'",
+		`git push origin feature "-f"`,
+		"git push --force;ls",
+		"git push -f|grep x",
+		"git push --force&&echo done",
+		"FOO=bar git push origin feature -f",
+		"/usr/bin/git push origin feature --force",
+		"timeout 5 git push origin feature -f",
+		"sudo git push origin feature --force",
 	}
 	for _, cmd := range denied {
 		t.Run(cmd, func(t *testing.T) {
@@ -148,6 +160,31 @@ func TestForcePushFlagPositionBypassesDenied(t *testing.T) {
 			}
 			if !matchedForceRule {
 				t.Fatalf("deny came from overlapping policy but not force-push rule: rules=%#v", verdict.Rules)
+			}
+		})
+	}
+
+	allowed := []string{
+		"git push origin feature",
+		"git push origin feature -ofoo",
+		"echo git push origin feature -f",
+		"git push origin feature && echo --force",
+		"git push origin feature; echo --force",
+		"git push origin feature | echo --force",
+	}
+	for _, cmd := range allowed {
+		t.Run("allow/"+cmd, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(cmd))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision == canonical.Deny {
+				t.Fatalf("safe command was denied: reason=%q rules=%#v", verdict.Reason, verdict.Rules)
+			}
+			for _, provenance := range verdict.Rules {
+				if provenance == forceRule {
+					t.Fatalf("safe command matched force-push provenance: rules=%#v", verdict.Rules)
+				}
 			}
 		})
 	}
