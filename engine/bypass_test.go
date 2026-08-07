@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jim80net/gatekeeper-core/canonical"
@@ -119,4 +120,42 @@ func TestBarePushOnMainDenied(t *testing.T) {
 			t.Errorf("bare push on feature: got %s, want allow", v.Decision)
 		}
 	})
+}
+
+// TestWrappedExecutableHeredocCannotHideDeny reproduces the live composition:
+// an allow for the timeout wrapper must not override a deny hidden inside an
+// interpreter heredoc. Wrapper identity is deliberately varied because it is
+// an open class; executable-heredoc classification must not enumerate it.
+func TestWrappedExecutableHeredocCannotHideDeny(t *testing.T) {
+	eng := defaultEngine(t, "feature-branch")
+	denied := []string{
+		"timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+		"cd /tmp && timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+		"sudo python <<'EOF'\nrm -rf /\nEOF",
+		"env FOO=bar python <<'EOF'\nrm -rf /\nEOF",
+		"nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\nrm -rf /\nEOF",
+	}
+	for _, command := range denied {
+		t.Run(command, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny {
+				t.Fatalf("wrapped executable heredoc escaped deny: decision=%s reason=%q", verdict.Decision, verdict.Reason)
+			}
+			if !strings.Contains(verdict.Reason, "Destructive: recursive delete") {
+				t.Fatalf("wrong deny provenance for wrapped executable heredoc: reason=%q", verdict.Reason)
+			}
+		})
+	}
+
+	dataCommand := "timeout 5 cat <<'EOF'\ndocumentation mentioning rm -rf /\nEOF"
+	verdict, err := eng.Evaluate(bashInput(dataCommand))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Decision != canonical.Allow {
+		t.Fatalf("data heredoc must remain stripped: decision=%s reason=%q", verdict.Decision, verdict.Reason)
+	}
 }

@@ -188,10 +188,161 @@ func ExtractCDPrefix(command string) string {
 // heredocStartRe matches heredoc markers: <<EOF, <<'EOF', <<"EOF", <<-EOF, etc.
 var heredocStartRe = regexp.MustCompile(`<<-?\s*(?:'(\w+)'|"(\w+)"|(\w+))`)
 
-// shellHeredocRe matches a shell interpreter receiving a heredoc as stdin.
-// This detects patterns like: bash <<'EOF', sh <<EOF, python <<'EOF', etc.
-// These heredocs contain executable code and must NOT be stripped.
-var shellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:bash|sh|dash|zsh|ksh|fish|python[23]?|ruby|perl|node|php)\s+<<`)
+// executableInterpreters names commands whose heredoc input is executable code.
+// The receiver may appear after any number of wrapper words (timeout, sudo,
+// env, nice, full paths, or wrappers unknown to Gatekeeper), so classification
+// deliberately does not enumerate wrappers.
+var executableInterpreters = map[string]struct{}{
+	"bash": {}, "sh": {}, "dash": {}, "zsh": {}, "ksh": {}, "fish": {},
+	"python": {}, "python2": {}, "python3": {},
+	"ruby": {}, "perl": {}, "node": {}, "php": {},
+}
+
+// executableHeredoc reports whether the current simple command contains a
+// known interpreter before its heredoc redirection. Looking at every shell word
+// rather than only the command-position word is intentionally conservative:
+// wrappers are an open class and may transfer execution to any later argv.
+func executableHeredoc(header string) bool {
+	segment := currentSimpleCommand(header)
+	for _, word := range shellWords(segment) {
+		if slash := strings.LastIndexByte(word, '/'); slash >= 0 {
+			word = word[slash+1:]
+		}
+		if isExecutableInterpreter(word) {
+			return true
+		}
+	}
+	return false
+}
+
+func isExecutableInterpreter(word string) bool {
+	if _, ok := executableInterpreters[word]; ok {
+		return true
+	}
+	for _, prefix := range []string{"python", "ruby", "node", "php"} {
+		if !strings.HasPrefix(word, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(word, prefix)
+		if suffix == "" {
+			return true
+		}
+		hasDigit := false
+		valid := true
+		for _, ch := range suffix {
+			if ch >= '0' && ch <= '9' {
+				hasDigit = true
+				continue
+			}
+			if ch != '.' {
+				valid = false
+				break
+			}
+		}
+		if valid && hasDigit {
+			return true
+		}
+	}
+	return false
+}
+
+// currentSimpleCommand drops completed commands without treating separators
+// inside quotes as syntax. The returned suffix ends immediately before the
+// heredoc operator supplied by the caller.
+func currentSimpleCommand(header string) string {
+	start := 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(header); i++ {
+		ch := header[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote == '\'' {
+			if ch == '\'' {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if quote == '"' {
+			if ch == '"' {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if strings.ContainsRune(";&|()`\n", rune(ch)) {
+			start = i + 1
+		}
+	}
+	return header[start:]
+}
+
+// shellWords performs the limited shell lexical operation needed here: split
+// unquoted whitespace, remove quoting, and honor backslash escapes. It does not
+// execute or expand input.
+func shellWords(input string) []string {
+	var words []string
+	var word strings.Builder
+	var quote byte
+	escaped := false
+	flush := func() {
+		if word.Len() > 0 {
+			words = append(words, word.String())
+			word.Reset()
+		}
+	}
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		if escaped {
+			word.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if quote == '\'' {
+			if ch == '\'' {
+				quote = 0
+			} else {
+				word.WriteByte(ch)
+			}
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if quote == '"' {
+			if ch == '"' {
+				quote = 0
+			} else {
+				word.WriteByte(ch)
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+			flush()
+			continue
+		}
+		word.WriteByte(ch)
+	}
+	if escaped {
+		word.WriteByte('\\')
+	}
+	flush()
+	return words
+}
 
 // StripHeredocs removes heredoc bodies from a Bash command string.
 // This prevents deny rules from matching against data content such as
@@ -226,8 +377,10 @@ func StripHeredocs(command string) string {
 					break
 				}
 			}
-			// If a shell interpreter is receiving this heredoc, keep the body.
-			if delim != "" && shellHeredocRe.MatchString(line) {
+			// If an interpreter is receiving this heredoc, keep the body. The
+			// interpreter may sit behind any number of wrapper words.
+			heredocOffset := strings.Index(line, m[0])
+			if delim != "" && heredocOffset >= 0 && executableHeredoc(line[:heredocOffset]) {
 				keepBody = true
 			}
 		}

@@ -300,9 +300,34 @@ func TestStripHeredocs(t *testing.T) {
 			want:    "echo something; bash <<'EOF'\nrm -rf /\nEOF",
 		},
 		{
+			name:    "timeout wrapped python heredoc preserved",
+			command: "timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+			want:    "timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+		},
+		{
+			name:    "cd and timeout wrapped python heredoc preserved",
+			command: "cd /tmp && timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+			want:    "cd /tmp && timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+		},
+		{
+			name:    "sudo wrapped python heredoc preserved",
+			command: "sudo python <<'EOF'\nrm -rf /\nEOF",
+			want:    "sudo python <<'EOF'\nrm -rf /\nEOF",
+		},
+		{
+			name:    "open wrapper class and full path preserved",
+			command: "nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\nrm -rf /\nEOF",
+			want:    "nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\nrm -rf /\nEOF",
+		},
+		{
 			name:    "cat heredoc still stripped",
 			command: "cat <<'EOF'\nrm -rf /\nEOF",
 			want:    "cat <<'EOF'",
+		},
+		{
+			name:    "interpreter in completed command does not preserve later data heredoc",
+			command: "echo python; cat <<'EOF'\nrm -rf /\nEOF",
+			want:    "echo python; cat <<'EOF'",
 		},
 	}
 
@@ -358,6 +383,21 @@ func TestHeredocContentDoesNotTriggerDeny(t *testing.T) {
 		{
 			name: "sh heredoc with git reset --hard denied",
 			cmd:  "sh <<'EOF'\ngit reset --hard\nEOF",
+			want: canonical.Deny,
+		},
+		{
+			name: "timeout python heredoc with rm -rf denied",
+			cmd:  "timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+			want: canonical.Deny,
+		},
+		{
+			name: "cd timeout python heredoc with rm -rf denied",
+			cmd:  "cd /tmp && timeout 5 python <<'EOF'\nrm -rf /\nEOF",
+			want: canonical.Deny,
+		},
+		{
+			name: "sudo python heredoc with rm -rf denied",
+			cmd:  "sudo python <<'EOF'\nrm -rf /\nEOF",
 			want: canonical.Deny,
 		},
 		{
