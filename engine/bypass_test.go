@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jim80net/gatekeeper-core/canonical"
@@ -12,6 +13,12 @@ import (
 // defaultEngine loads the shipped gatekeeper.toml and stubs the precondition
 // executor to report the given current branch (for the bare-`git push` rule).
 func defaultEngine(t *testing.T, currentBranch string) *engine.Engine {
+	t.Helper()
+	eng, _ := defaultEngineWithConfig(t, currentBranch)
+	return eng
+}
+
+func defaultEngineWithConfig(t *testing.T, currentBranch string) (*engine.Engine, *config.Config) {
 	t.Helper()
 	cfg, err := config.LoadFile("../gatekeeper.toml")
 	if err != nil {
@@ -24,7 +31,7 @@ func defaultEngine(t *testing.T, currentBranch string) *engine.Engine {
 	eng.SetExecCommand(func(ctx context.Context, cwd, command, toolInput string) (string, error) {
 		return currentBranch + "\n", nil
 	})
-	return eng
+	return eng, cfg
 }
 
 // TestPushToMainBypassClasses asserts the shipped push-to-main rules deny every
@@ -90,6 +97,57 @@ func TestPushToMainFalsePositiveGuards(t *testing.T) {
 			}
 			if v.Decision == canonical.Deny {
 				t.Errorf("expected NOT-deny for %q, got DENY (%s)", cmd, v.Reason)
+			}
+		})
+	}
+}
+
+// TestForcePushFlagPositionBypassesDenied locks the shipped template against
+// the older rule that matched force flags only immediately after `git push`.
+// The branch precondition is explicitly modelled as a feature worktree so an
+// overlapping protected-branch deny cannot hide a weak force-push backstop.
+func TestForcePushFlagPositionBypassesDenied(t *testing.T) {
+	eng, cfg := defaultEngineWithConfig(t, "feature-branch")
+	forceRule := canonical.RuleProvenance{}
+	for _, rule := range cfg.Rules {
+		if rule.Reason == "Destructive: git force push" {
+			forceRule = canonical.RuleProvenance{Source: rule.Source, Index: rule.SourceIndex}
+			break
+		}
+	}
+	if forceRule.Index == 0 {
+		t.Fatal("shipped template has no force-push rule provenance")
+	}
+	denied := []string{
+		"git push --force",
+		"git push -f",
+		"git push --force-with-lease=origin/main",
+		"git push origin main --force",
+		"git push origin main -f",
+		"git push -u origin feature -f",
+		"cd /tmp && git push origin main --force",
+	}
+	for _, cmd := range denied {
+		t.Run(cmd, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(cmd))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny {
+				t.Fatalf("force-push bypass was not denied: decision=%s reason=%q", verdict.Decision, verdict.Reason)
+			}
+			if !strings.Contains(verdict.Reason, "Destructive: git force push") {
+				t.Fatalf("force-push backstop did not carry the deny: reason=%q", verdict.Reason)
+			}
+			matchedForceRule := false
+			for _, provenance := range verdict.Rules {
+				if provenance == forceRule {
+					matchedForceRule = true
+					break
+				}
+			}
+			if !matchedForceRule {
+				t.Fatalf("deny came from overlapping policy but not force-push rule: rules=%#v", verdict.Rules)
 			}
 		})
 	}

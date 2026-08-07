@@ -57,11 +57,12 @@ reason = "Destructive: git clean with force"
 
 [[rules]]
 tool   = 'Bash'
-input  = 'git\s+push\s+(-[a-zA-Z]*f|--force|--force-with-lease)'
+input  = '(?:^|[\s|;&(/`])git\s+push\b[^|;&\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\S+)?)(?=\s|$)'
 decision = "deny"
 reason = "Destructive: git force push"
-# env-prefix aware:
-# input = '(\w+=\S+\s+)*git\s+push\s+(-[a-zA-Z]*f|--force|--force-with-lease)'
+# The token boundary covers wrappers, binary paths, and subshells without matching
+# words that merely end in "git"; the argument span never crosses a shell separator.
+# Synced from gatekeeper-claude PR #45 (e0e9998) on 2026-08-07.
 
 [[rules]]
 tool   = 'Bash'
