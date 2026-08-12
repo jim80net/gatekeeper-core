@@ -380,6 +380,155 @@ func TestHeredocContentDoesNotTriggerDeny(t *testing.T) {
 	}
 }
 
+func TestInvocationAwareDenyDistinguishesMentionFromOperation(t *testing.T) {
+	rules := []config.Rule{
+		{
+			Tool: "Bash", Executables: []string{"rm"},
+			Input:    `\brm\s+(-[a-zA-Z]*r|--recursive)`,
+			Decision: "deny", Reason: "recursive delete",
+		},
+		{Tool: "Bash", Input: `(?:^|[|;&]\s*)echo(?:\s|$)`, Decision: "allow", Reason: "echo"},
+	}
+	eng := newEngine(t, rules)
+
+	tests := []struct {
+		name           string
+		command        string
+		want           canonical.Decision
+		wantExecutable string
+	}{
+		{
+			name:    "negative control quoted JSON mention is inert",
+			command: `echo '{"tool_input":{"command":"rm -rf /path"}}' | some-consumer`,
+			want:    canonical.Allow,
+		},
+		{
+			name:    "negative control double quoted mention is inert",
+			command: `echo "rm -rf /path"`,
+			want:    canonical.Allow,
+		},
+		{
+			name:    "negative control printf data mention is inert",
+			command: `printf '%s' 'rm -rf /path'`,
+			want:    canonical.Abstain,
+		},
+		{
+			name:    "negative control flag value mention is inert",
+			command: `some-consumer --note='rm -rf /path'`,
+			want:    canonical.Abstain,
+		},
+		{
+			name:           "positive control destructive command is invoked",
+			command:        `echo safe && rm -rf /actual`,
+			want:           canonical.Deny,
+			wantExecutable: "rm",
+		},
+		{
+			name:           "positive control quoted destructive flag is invoked",
+			command:        `rm '-rf' '/actual'`,
+			want:           canonical.Deny,
+			wantExecutable: "rm",
+		},
+		{
+			name:           "positive control command substitution is invoked",
+			command:        `echo "$(rm -rf /actual)"`,
+			want:           canonical.Deny,
+			wantExecutable: "rm",
+		},
+		{
+			name:           "positive control closed wrappers preserve invocation",
+			command:        `env FOO=bar timeout 5 nohup rm -rf /actual`,
+			want:           canonical.Deny,
+			wantExecutable: "rm",
+		},
+		{
+			name:    "positive control interpreter handoff retains legacy denial",
+			command: `bash -c 'rm -rf /actual'`,
+			want:    canonical.Deny,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(test.command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != test.want {
+				t.Fatalf("decision = %s reason=%q, want %s", verdict.Decision, verdict.Reason, test.want)
+			}
+			if test.wantExecutable != "" {
+				if len(verdict.ShellMatches) != 1 || verdict.ShellMatches[0].Executable != test.wantExecutable {
+					t.Fatalf("shell provenance = %#v, want executable %q", verdict.ShellMatches, test.wantExecutable)
+				}
+				match := verdict.ShellMatches[0]
+				if match.InvocationID == "" || match.Span.End <= match.Span.Start || len(match.SourceDigest) != 64 || match.ParserVersion != canonical.ShellPlanParserVersion {
+					t.Fatalf("incomplete shell provenance: %#v", match)
+				}
+			}
+		})
+	}
+}
+
+func TestInvocationAwareSubcommandIsExactToken(t *testing.T) {
+	eng := newEngine(t, []config.Rule{
+		{
+			Tool: "Bash", Executables: []string{"git"}, Subcommand: "merge",
+			Input: `git\s+merge`, Decision: "deny", Reason: "local merge",
+		},
+		{Tool: "Bash", Input: `(?:^|[|;&]\s*)git\s`, Decision: "allow", Reason: "git"},
+	})
+	for _, command := range []string{"git merge-base HEAD main", "git merge-tree HEAD HEAD HEAD", "echo 'git merge topic'"} {
+		verdict, err := eng.Evaluate(bashInput(command))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verdict.Decision == canonical.Deny {
+			t.Fatalf("%q denied as merge: %#v", command, verdict)
+		}
+	}
+	verdict, err := eng.Evaluate(bashInput("git merge topic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Decision != canonical.Deny || len(verdict.ShellMatches) != 1 || verdict.ShellMatches[0].Subcommand != "merge" {
+		t.Fatalf("real merge verdict = %#v", verdict)
+	}
+}
+
+func TestExecutableHeredocRetainsNamedP0(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	verdict, err := eng.Evaluate(bashInput("bash <<'EOF'\nrm -rf /\nEOF"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Decision != canonical.Deny || verdict.Reason != engine.P0ExecutableHeredocReason {
+		t.Fatalf("verdict = %#v, want named heredoc P0", verdict)
+	}
+	if len(verdict.ShellMatches) != 0 {
+		t.Fatalf("heredoc P0 must not claim parsed invocation provenance: %#v", verdict.ShellMatches)
+	}
+}
+
+func TestInterpreterHandoffRetainsLegacyVerdictWithoutParsedClaim(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	verdict, err := eng.Evaluate(bashInput(`bash -c 'rm -rf /actual'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Decision != canonical.Deny || verdict.Reason != "recursive delete" {
+		t.Fatalf("verdict = %#v, want retained legacy denial", verdict)
+	}
+	if len(verdict.ShellMatches) != 0 {
+		t.Fatalf("legacy handoff must not claim parsed operation: %#v", verdict.ShellMatches)
+	}
+}
+
 func TestToolMatching(t *testing.T) {
 	eng := newEngine(t, []config.Rule{
 		{Tool: "Read|Glob|Grep", Input: ".*", Decision: "allow", Reason: "browsing"},
@@ -514,6 +663,10 @@ func TestDefaultRules(t *testing.T) {
 		{"allow drop in commit msg", bashInput("git commit -m 'fix: drop old feature'"), canonical.Allow},
 		{"allow drop in echo", bashInput("echo 'drop this thing'"), canonical.Allow},
 		{"deny cat .env", bashInput("cat .env"), canonical.Deny},
+		{"allow quoted JSON recursive-delete mention", bashInput(`echo '{"tool_input":{"command":"rm -rf /path"}}'`), canonical.Allow},
+		{"allow hard-reset mention in commit message", bashInput("git commit -m 'document git reset --hard'"), canonical.Allow},
+		{"allow sed mention in echo data", bashInput("echo 'sed -i example'"), canonical.Allow},
+		{"allow credential-read mention in printf data", bashInput("printf '%s' 'cat .env'"), canonical.Allow},
 		{"deny read .env", readInput("/project/.env"), canonical.Deny},
 		{"deny read id_rsa", readInput("/home/user/.ssh/id_rsa"), canonical.Deny},
 		{"deny read key.json", readInput("/tmp/service-key.json"), canonical.Deny},

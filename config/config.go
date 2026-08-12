@@ -35,12 +35,17 @@ type Config struct {
 
 // Rule is a single permission rule.
 type Rule struct {
-	Tool              string `toml:"tool"`
-	Input             string `toml:"input"`
-	Decision          string `toml:"decision"`
-	Reason            string `toml:"reason"`
-	Precondition      string `toml:"precondition,omitempty"`
-	PreconditionMatch string `toml:"precondition_match,omitempty"`
+	Tool  string `toml:"tool"`
+	Input string `toml:"input"`
+	// Executables and Subcommand opt a Bash rule into invocation-aware
+	// matching. Executable identities are exact basenames; Subcommand is an
+	// exact token for multiplexer commands such as git.
+	Executables       []string `toml:"executables,omitempty"`
+	Subcommand        string   `toml:"subcommand,omitempty"`
+	Decision          string   `toml:"decision"`
+	Reason            string   `toml:"reason"`
+	Precondition      string   `toml:"precondition,omitempty"`
+	PreconditionMatch string   `toml:"precondition_match,omitempty"`
 	// Source and SourceIndex identify the file and 1-based position that
 	// produced this rule. They are runtime metadata, not TOML fields.
 	Source      string `toml:"-"`
