@@ -387,7 +387,6 @@ func TestInvocationAwareDenyDistinguishesMentionFromOperation(t *testing.T) {
 			Input:    `\brm\s+(-[a-zA-Z]*r|--recursive)`,
 			Decision: "deny", Reason: "recursive delete",
 		},
-		{Tool: "Bash", Input: `(?:^|[|;&]\s*)echo(?:\s|$)`, Decision: "allow", Reason: "echo"},
 	}
 	eng := newEngine(t, rules)
 
@@ -400,12 +399,12 @@ func TestInvocationAwareDenyDistinguishesMentionFromOperation(t *testing.T) {
 		{
 			name:    "negative control quoted JSON mention is inert",
 			command: `echo '{"tool_input":{"command":"rm -rf /path"}}' | some-consumer`,
-			want:    canonical.Allow,
+			want:    canonical.Abstain,
 		},
 		{
 			name:    "negative control double quoted mention is inert",
 			command: `echo "rm -rf /path"`,
-			want:    canonical.Allow,
+			want:    canonical.Abstain,
 		},
 		{
 			name:    "negative control printf data mention is inert",
@@ -475,15 +474,14 @@ func TestInvocationAwareSubcommandIsExactToken(t *testing.T) {
 			Tool: "Bash", Executables: []string{"git"}, Subcommand: "merge",
 			Input: `git\s+merge`, Decision: "deny", Reason: "local merge",
 		},
-		{Tool: "Bash", Input: `(?:^|[|;&]\s*)git\s`, Decision: "allow", Reason: "git"},
 	})
 	for _, command := range []string{"git merge-base HEAD main", "git merge-tree HEAD HEAD HEAD", "echo 'git merge topic'"} {
 		verdict, err := eng.Evaluate(bashInput(command))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if verdict.Decision == canonical.Deny {
-			t.Fatalf("%q denied as merge: %#v", command, verdict)
+		if verdict.Decision != canonical.Abstain {
+			t.Fatalf("%q decision = %s, want abstain: %#v", command, verdict.Decision, verdict)
 		}
 	}
 	verdict, err := eng.Evaluate(bashInput("git merge topic"))
