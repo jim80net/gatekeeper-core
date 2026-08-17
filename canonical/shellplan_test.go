@@ -47,3 +47,29 @@ func TestParseShellPlanUnwrapsClosedLiteralWrappers(t *testing.T) {
 		}
 	}
 }
+
+func TestParseShellPlanClassifiesExecutableHeredocsStructurally(t *testing.T) {
+	for _, source := range []string{
+		"bash -s <<'EOF'\necho ok\nEOF",
+		"/bin/bash <<'EOF'\necho ok\nEOF",
+		"echo before; bash <<'EOF'\necho ok\nEOF",
+		"printf x | /bin/bash -s <<'EOF'\necho ok\nEOF",
+		"env FOO=bar timeout 5 nohup /bin/bash -s <<'EOF'\necho ok\nEOF",
+	} {
+		plan, err := canonical.ParseShellPlan(source)
+		if err != nil {
+			t.Fatalf("ParseShellPlan(%q): %v", source, err)
+		}
+		if len(plan.ExecutableHeredocLines) != 1 || plan.ExecutableHeredocLines[0] != 1 {
+			t.Fatalf("ParseShellPlan(%q) heredoc lines = %v, want [1]", source, plan.ExecutableHeredocLines)
+		}
+	}
+
+	plan, err := canonical.ParseShellPlan("cat <<'EOF'\necho data\nEOF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ExecutableHeredocLines) != 0 {
+		t.Fatalf("data heredoc classified executable: %v", plan.ExecutableHeredocLines)
+	}
+}

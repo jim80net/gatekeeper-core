@@ -35,9 +35,10 @@ type ShellInvocation struct {
 
 // ShellPlan is the versioned, non-executing interpretation used by Bash rules.
 type ShellPlan struct {
-	SourceDigest  string
-	ParserVersion string
-	Invocations   []ShellInvocation
+	SourceDigest           string
+	ParserVersion          string
+	Invocations            []ShellInvocation
+	ExecutableHeredocLines []uint
 }
 
 // ParseShellPlan parses Bash source without expansion or execution. A command
@@ -56,6 +57,9 @@ func ParseShellPlan(source string) (ShellPlan, error) {
 	}
 
 	syntax.Walk(file, func(node syntax.Node) bool {
+		if stmt, ok := node.(*syntax.Stmt); ok {
+			collectExecutableHeredocs(&plan, stmt)
+		}
 		call, ok := node.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
 			return true
@@ -85,6 +89,60 @@ func ParseShellPlan(source string) (ShellPlan, error) {
 		return true
 	})
 	return plan, nil
+}
+
+func collectExecutableHeredocs(plan *ShellPlan, stmt *syntax.Stmt) {
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return
+	}
+	executable, ok := literalWord(call.Args[0])
+	if !ok {
+		return
+	}
+	arguments := make([]string, len(call.Args)-1)
+	literals := make([]bool, len(call.Args)-1)
+	for i, word := range call.Args[1:] {
+		arguments[i], literals[i] = literalWord(word)
+	}
+	for depth := 0; depth < 8; depth++ {
+		innerExecutable, innerArguments, innerLiterals, unwrapped := unwrapLiteralWrapper(executable, arguments, literals)
+		if !unwrapped {
+			break
+		}
+		executable, arguments, literals = innerExecutable, innerArguments, innerLiterals
+	}
+	if !isExecutableHeredocInterpreter(filepath.Base(executable)) {
+		return
+	}
+	for _, redirect := range stmt.Redirs {
+		if redirect.Op != syntax.Hdoc && redirect.Op != syntax.DashHdoc {
+			continue
+		}
+		line := redirect.OpPos.Line()
+		if line == 0 || containsLine(plan.ExecutableHeredocLines, line) {
+			continue
+		}
+		plan.ExecutableHeredocLines = append(plan.ExecutableHeredocLines, line)
+	}
+}
+
+func isExecutableHeredocInterpreter(executable string) bool {
+	switch executable {
+	case "bash", "sh", "dash", "zsh", "ksh", "fish", "python", "python2", "python3", "ruby", "perl", "node", "php":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsLine(lines []uint, target uint) bool {
+	for _, line := range lines {
+		if line == target {
+			return true
+		}
+	}
+	return false
 }
 
 func appendWrappedInvocations(plan *ShellPlan, source string, span SourceSpan, executable string, arguments []string, literals []bool) {

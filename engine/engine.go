@@ -72,7 +72,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 	// against data content (e.g., commit messages mentioning "rm -rf").
 	matchStr := inputStr
 	if tc.Tool == canonical.ToolBash {
-		matchStr = StripHeredocs(inputStr)
+		matchStr = stripHeredocsWithPlan(inputStr, shellPlan, shellPlanErr)
 		if e.debug && matchStr != inputStr {
 			canonical.Debugf("  stripped heredocs: %q", matchStr)
 		}
@@ -95,7 +95,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 		p0HeredocMatch := false
 		if tc.Tool == canonical.ToolBash && len(rule.Executables) > 0 && shellPlanErr == nil {
 			shellMatch = matchShellInvocation(rule, shellPlan)
-			if shellMatch == nil && shellHeredocRe.MatchString(inputStr) {
+			if shellMatch == nil && len(shellPlan.ExecutableHeredocLines) > 0 {
 				// Deliberate P0: executable heredoc bodies remain on the legacy
 				// raw-text backstop until their interpreter semantics are classified.
 				matched, matchErr := rule.InputRegex.MatchString(matchStr)
@@ -176,7 +176,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 func hasLegacyExecutionHandoff(plan canonical.ShellPlan) bool {
 	for _, invocation := range plan.Invocations {
 		switch invocation.Executable {
-		case "bash", "sh", "dash", "zsh", "ksh", "fish", "eval", "xargs", "find":
+		case "bash", "sh", "dash", "zsh", "ksh", "fish", "eval", "xargs", "find", "sudo":
 			return true
 		}
 	}
@@ -193,13 +193,19 @@ func matchShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) *c
 		if _, ok := rule.Executables[invocation.Executable]; !ok {
 			continue
 		}
-		subcommand := shellSubcommand(invocation)
+		subcommand, subcommandIndex := shellSubcommand(invocation)
 		if rule.Subcommand != "" && subcommand != rule.Subcommand {
 			continue
 		}
 		matchWords := make([]string, 1, len(invocation.Arguments)+1)
 		matchWords[0] = invocation.Executable
-		for i, argument := range invocation.Arguments {
+		argumentStart := 0
+		if invocation.Executable == "git" && subcommandIndex >= 0 {
+			matchWords = append(matchWords, subcommand)
+			argumentStart = subcommandIndex + 1
+		}
+		for i := argumentStart; i < len(invocation.Arguments); i++ {
+			argument := invocation.Arguments[i]
 			if invocation.ArgumentLiterals[i] {
 				matchWords = append(matchWords, argument)
 			} else {
@@ -222,34 +228,49 @@ func matchShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) *c
 	return nil
 }
 
-func shellSubcommand(invocation canonical.ShellInvocation) string {
+func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
 	if invocation.Executable != "git" {
 		if len(invocation.Arguments) > 0 && invocation.ArgumentLiterals[0] {
-			return invocation.Arguments[0]
+			return invocation.Arguments[0], 0
 		}
-		return ""
+		return "", -1
 	}
 	for i := 0; i < len(invocation.Arguments); i++ {
 		if !invocation.ArgumentLiterals[i] {
-			return ""
+			return "", -1
 		}
 		arg := invocation.Arguments[i]
 		if arg == "--" {
 			if i+1 < len(invocation.Arguments) && invocation.ArgumentLiterals[i+1] {
-				return invocation.Arguments[i+1]
+				return invocation.Arguments[i+1], i + 1
 			}
-			return ""
+			return "", -1
 		}
 		if arg == "-C" || arg == "-c" || arg == "--git-dir" || arg == "--work-tree" || arg == "--namespace" || arg == "--exec-path" {
+			if i+1 >= len(invocation.Arguments) || !invocation.ArgumentLiterals[i+1] {
+				return "", -1
+			}
 			i++
+			continue
+		}
+		if isAttachedGitGlobal(arg) {
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-		return arg
+		return arg, i
 	}
-	return ""
+	return "", -1
+}
+
+func isAttachedGitGlobal(argument string) bool {
+	for _, prefix := range []string{"--git-dir=", "--work-tree=", "--namespace=", "--exec-path=", "--config-env="} {
+		if strings.HasPrefix(argument, prefix) && len(argument) > len(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) checkPrecondition(cmd string, matchRe *regexp2.Regexp, cwd string, cdPrefix string, toolInput string) bool {
@@ -310,10 +331,9 @@ func ExtractCDPrefix(command string) string {
 // heredocStartRe matches heredoc markers: <<EOF, <<'EOF', <<"EOF", <<-EOF, etc.
 var heredocStartRe = regexp.MustCompile(`<<-?\s*(?:'(\w+)'|"(\w+)"|(\w+))`)
 
-// shellHeredocRe matches a shell interpreter receiving a heredoc as stdin.
-// This detects patterns like: bash <<'EOF', sh <<EOF, python <<'EOF', etc.
-// These heredocs contain executable code and must NOT be stripped.
-var shellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:bash|sh|dash|zsh|ksh|fish|python[23]?|ruby|perl|node|php)\s+<<`)
+// legacyShellHeredocRe is used only when the Bash parser rejects the input.
+// Valid input uses ShellPlan's statement/redirection structure instead.
+var legacyShellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:\S*/)?(?:bash|sh|dash|zsh|ksh|fish|python[23]?|ruby|perl|node|php)\b[^\n<]*<<`)
 
 // StripHeredocs removes heredoc bodies from a Bash command string.
 // This prevents deny rules from matching against data content such as
@@ -321,12 +341,21 @@ var shellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:bash|sh|dash|zsh|ksh|f
 // However, heredocs fed as stdin to shell interpreters (bash, sh, python, etc.)
 // are preserved because they contain executable code that deny rules must check.
 func StripHeredocs(command string) string {
+	plan, err := canonical.ParseShellPlan(command)
+	return stripHeredocsWithPlan(command, plan, err)
+}
+
+func stripHeredocsWithPlan(command string, plan canonical.ShellPlan, planErr error) string {
 	lines := strings.Split(command, "\n")
 	var result []string
 	var delim string
 	keepBody := false
+	executableLines := make(map[uint]struct{}, len(plan.ExecutableHeredocLines))
+	for _, line := range plan.ExecutableHeredocLines {
+		executableLines[line] = struct{}{}
+	}
 
-	for _, line := range lines {
+	for lineIndex, line := range lines {
 		if delim != "" {
 			if keepBody {
 				result = append(result, line)
@@ -348,9 +377,14 @@ func StripHeredocs(command string) string {
 					break
 				}
 			}
-			// If a shell interpreter is receiving this heredoc, keep the body.
-			if delim != "" && shellHeredocRe.MatchString(line) {
-				keepBody = true
+			// Valid source uses the parsed statement/redirection association.
+			// The regex is a fail-closed compatibility fallback only when the
+			// parser rejected the full input.
+			if delim != "" {
+				_, keepBody = executableLines[uint(lineIndex+1)]
+				if planErr != nil {
+					keepBody = legacyShellHeredocRe.MatchString(line)
+				}
 			}
 		}
 

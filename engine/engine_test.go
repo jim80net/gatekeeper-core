@@ -527,6 +527,113 @@ func TestInterpreterHandoffRetainsLegacyVerdictWithoutParsedClaim(t *testing.T) 
 	}
 }
 
+func TestUnknownWrapperRetainsLegacyVerdictWithoutParsedClaim(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	verdict, err := eng.Evaluate(bashInput(`sudo rm -rf /actual`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Decision != canonical.Deny || verdict.Reason != "recursive delete" {
+		t.Fatalf("verdict = %#v, want retained legacy denial", verdict)
+	}
+	if len(verdict.ShellMatches) != 0 {
+		t.Fatalf("unknown wrapper must not claim parsed rm: %#v", verdict.ShellMatches)
+	}
+
+	mention, err := eng.Evaluate(bashInput(`echo 'sudo rm -rf /actual'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mention.Decision != canonical.Abstain {
+		t.Fatalf("quoted unknown-wrapper mention = %#v, want abstain", mention)
+	}
+}
+
+func TestDefaultGitDeniesAfterGlobalOptions(t *testing.T) {
+	cfg, err := config.LoadFile("../gatekeeper.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := engine.New(cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.SetExecCommand(func(ctx context.Context, cwd, command, toolInput string) (string, error) {
+		return "main\n", nil
+	})
+
+	for _, command := range []string{
+		"git -c color.ui=false reset --hard HEAD~1",
+		"git --git-dir=/tmp/repo.git reset --hard HEAD~1",
+		"git -c color.ui=false clean -fd",
+		"git --work-tree=/tmp/repo clean -fd",
+		"git -c color.ui=false push --force origin topic",
+		"git --namespace=review push --force origin topic",
+		"git -c color.ui=false commit --amend -m fix",
+		"git --exec-path=/usr/lib/git-core commit --amend -m fix",
+		"git -c color.ui=false branch -D topic",
+		"git --git-dir=/tmp/repo.git branch -D topic",
+		"git -C /tmp/repo push origin main",
+		"git --work-tree=/tmp/repo push origin main",
+		"git -c color.ui=false push origin",
+		"git --namespace=review push origin",
+	} {
+		t.Run(command, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny {
+				t.Fatalf("decision = %s reason=%q, want deny", verdict.Decision, verdict.Reason)
+			}
+			if len(verdict.ShellMatches) == 0 || verdict.ShellMatches[0].Executable != "git" {
+				t.Fatalf("missing git parsed provenance: %#v", verdict.ShellMatches)
+			}
+		})
+	}
+}
+
+func TestExecutableHeredocP0CoversPathsOptionsAndComposition(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	for _, command := range []string{
+		"bash -s <<'EOF'\nrm -rf /actual\nEOF",
+		"/bin/bash <<'EOF'\nrm -rf /actual\nEOF",
+		"echo before; bash -s <<'EOF'\nrm -rf /actual\nEOF",
+		"printf x | /bin/bash <<'EOF'\nrm -rf /actual\nEOF",
+		"env FOO=bar bash -s <<'EOF'\nrm -rf /actual\nEOF",
+		"timeout 5 /bin/bash <<'EOF'\nrm -rf /actual\nEOF",
+		"command bash <<'EOF'\nrm -rf /actual\nEOF",
+		"nohup /bin/bash <<'EOF'\nrm -rf /actual\nEOF",
+	} {
+		t.Run(command, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny || verdict.Reason != engine.P0ExecutableHeredocReason {
+				t.Fatalf("verdict = %#v, want named heredoc P0", verdict)
+			}
+			if len(verdict.ShellMatches) != 0 {
+				t.Fatalf("heredoc P0 claimed parsed operation: %#v", verdict.ShellMatches)
+			}
+		})
+	}
+
+	data, err := eng.Evaluate(bashInput("cat <<'EOF'\nrm -rf /actual\nEOF"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Decision != canonical.Abstain {
+		t.Fatalf("data heredoc = %#v, want abstain", data)
+	}
+}
+
 func TestToolMatching(t *testing.T) {
 	eng := newEngine(t, []config.Rule{
 		{Tool: "Read|Glob|Grep", Input: ".*", Decision: "allow", Reason: "browsing"},
