@@ -596,6 +596,25 @@ func TestDefaultGitDeniesAfterGlobalOptions(t *testing.T) {
 	}
 }
 
+func TestTerminalGitGlobalModesDoNotManufactureCommands(t *testing.T) {
+	eng := newEngine(t, []config.Rule{
+		{Tool: "Bash", Executables: []string{"git"}, Subcommand: "push", Input: `git\s+push.*--force`, Decision: "deny", Reason: "force push"},
+		{Tool: "Bash", Executables: []string{"git"}, Subcommand: "reset", Input: `git\s+reset\s+--hard`, Decision: "deny", Reason: "hard reset"},
+	})
+	for _, command := range []string{
+		"git --version push --force origin topic",
+		"git --help reset --hard HEAD~1",
+	} {
+		verdict, err := eng.Evaluate(bashInput(command))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verdict.Decision != canonical.Abstain {
+			t.Fatalf("terminal git mode %q = %#v, want abstain", command, verdict)
+		}
+	}
+}
+
 func TestExecutableHeredocP0CoversPathsOptionsAndComposition(t *testing.T) {
 	eng := newEngine(t, []config.Rule{{
 		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
@@ -631,6 +650,42 @@ func TestExecutableHeredocP0CoversPathsOptionsAndComposition(t *testing.T) {
 	}
 	if data.Decision != canonical.Abstain {
 		t.Fatalf("data heredoc = %#v, want abstain", data)
+	}
+}
+
+func TestMixedSameLineHeredocsUseExactRedirectionClassification(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+
+	for _, command := range []string{
+		"cat <<'DATA'; bash <<'CODE'\nrm -rf /mentioned\nDATA\necho safe\nCODE",
+		"bash <<'CODE'; cat <<'DATA'\necho safe\nCODE\nrm -rf /mentioned\nDATA",
+	} {
+		verdict, err := eng.Evaluate(bashInput(command))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verdict.Decision != canonical.Abstain {
+			t.Fatalf("dangerous cat body in %q = %#v, want abstain", command, verdict)
+		}
+	}
+
+	for _, command := range []string{
+		"cat <<'DATA'; bash <<'CODE'\necho safe\nDATA\nrm -rf /actual\nCODE",
+		"bash <<'CODE'; cat <<'DATA'\nrm -rf /actual\nCODE\necho safe\nDATA",
+	} {
+		verdict, err := eng.Evaluate(bashInput(command))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verdict.Decision != canonical.Deny || verdict.Reason != engine.P0ExecutableHeredocReason {
+			t.Fatalf("destructive executable body in %q = %#v, want named heredoc P0", command, verdict)
+		}
+		if len(verdict.ShellMatches) != 0 {
+			t.Fatalf("mixed heredoc P0 claimed parsed operation: %#v", verdict.ShellMatches)
+		}
 	}
 }
 

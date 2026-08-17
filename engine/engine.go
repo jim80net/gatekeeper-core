@@ -95,7 +95,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 		p0HeredocMatch := false
 		if tc.Tool == canonical.ToolBash && len(rule.Executables) > 0 && shellPlanErr == nil {
 			shellMatch = matchShellInvocation(rule, shellPlan)
-			if shellMatch == nil && len(shellPlan.ExecutableHeredocLines) > 0 {
+			if shellMatch == nil && hasExecutableHeredoc(shellPlan) {
 				// Deliberate P0: executable heredoc bodies remain on the legacy
 				// raw-text backstop until their interpreter semantics are classified.
 				matched, matchErr := rule.InputRegex.MatchString(matchStr)
@@ -183,6 +183,15 @@ func hasLegacyExecutionHandoff(plan canonical.ShellPlan) bool {
 	return false
 }
 
+func hasExecutableHeredoc(plan canonical.ShellPlan) bool {
+	for _, heredoc := range plan.Heredocs {
+		if heredoc.Executable {
+			return true
+		}
+	}
+	return false
+}
+
 // P0ExecutableHeredocReason deliberately remains separate from mention-aware
 // invocation matching. It names the conservative interim over-block rather
 // than pretending an interpreter heredoc was statically resolved.
@@ -240,6 +249,9 @@ func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
 			return "", -1
 		}
 		arg := invocation.Arguments[i]
+		if isTerminalGitGlobal(arg) {
+			return "", -1
+		}
 		if arg == "--" {
 			if i+1 < len(invocation.Arguments) && invocation.ArgumentLiterals[i+1] {
 				return invocation.Arguments[i+1], i + 1
@@ -256,12 +268,33 @@ func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
 		if isAttachedGitGlobal(arg) {
 			continue
 		}
-		if strings.HasPrefix(arg, "-") {
+		if isCommandAdmittingGitGlobal(arg) {
 			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			return "", -1
 		}
 		return arg, i
 	}
 	return "", -1
+}
+
+func isTerminalGitGlobal(argument string) bool {
+	switch argument {
+	case "--version", "--help", "-h", "--html-path", "--man-path", "--info-path":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCommandAdmittingGitGlobal(argument string) bool {
+	switch argument {
+	case "-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice":
+		return true
+	default:
+		return false
+	}
 }
 
 func isAttachedGitGlobal(argument string) bool {
@@ -350,10 +383,8 @@ func stripHeredocsWithPlan(command string, plan canonical.ShellPlan, planErr err
 	var result []string
 	var delim string
 	keepBody := false
-	executableLines := make(map[uint]struct{}, len(plan.ExecutableHeredocLines))
-	for _, line := range plan.ExecutableHeredocLines {
-		executableLines[line] = struct{}{}
-	}
+	var pending []canonical.ShellHeredoc
+	nextHeredoc := 0
 
 	for lineIndex, line := range lines {
 		if delim != "" {
@@ -362,14 +393,31 @@ func stripHeredocsWithPlan(command string, plan canonical.ShellPlan, planErr err
 			}
 			// Inside a heredoc body — skip/keep lines until closing delimiter.
 			if strings.TrimSpace(line) == delim {
-				delim = ""
-				keepBody = false
+				if len(pending) > 0 {
+					next := pending[0]
+					pending = pending[1:]
+					delim = next.Delimiter
+					keepBody = next.Executable
+				} else {
+					delim = ""
+					keepBody = false
+				}
 			}
 			continue
 		}
 
-		// Check if this line introduces a heredoc.
-		if m := heredocStartRe.FindStringSubmatch(line); m != nil {
+		if planErr == nil {
+			for nextHeredoc < len(plan.Heredocs) && plan.Heredocs[nextHeredoc].Line == uint(lineIndex+1) {
+				pending = append(pending, plan.Heredocs[nextHeredoc])
+				nextHeredoc++
+			}
+			if len(pending) > 0 {
+				next := pending[0]
+				pending = pending[1:]
+				delim = next.Delimiter
+				keepBody = next.Executable
+			}
+		} else if m := heredocStartRe.FindStringSubmatch(line); m != nil {
 			// Capture group 1, 2, or 3 holds the delimiter word.
 			for _, g := range m[1:] {
 				if g != "" {
@@ -377,14 +425,8 @@ func stripHeredocsWithPlan(command string, plan canonical.ShellPlan, planErr err
 					break
 				}
 			}
-			// Valid source uses the parsed statement/redirection association.
-			// The regex is a fail-closed compatibility fallback only when the
-			// parser rejected the full input.
 			if delim != "" {
-				_, keepBody = executableLines[uint(lineIndex+1)]
-				if planErr != nil {
-					keepBody = legacyShellHeredocRe.MatchString(line)
-				}
+				keepBody = legacyShellHeredocRe.MatchString(line)
 			}
 		}
 

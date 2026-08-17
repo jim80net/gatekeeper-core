@@ -60,8 +60,8 @@ func TestParseShellPlanClassifiesExecutableHeredocsStructurally(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseShellPlan(%q): %v", source, err)
 		}
-		if len(plan.ExecutableHeredocLines) != 1 || plan.ExecutableHeredocLines[0] != 1 {
-			t.Fatalf("ParseShellPlan(%q) heredoc lines = %v, want [1]", source, plan.ExecutableHeredocLines)
+		if len(plan.Heredocs) != 1 || plan.Heredocs[0].Line != 1 || !plan.Heredocs[0].Executable {
+			t.Fatalf("ParseShellPlan(%q) heredocs = %#v, want one executable redirect on line 1", source, plan.Heredocs)
 		}
 	}
 
@@ -69,7 +69,25 @@ func TestParseShellPlanClassifiesExecutableHeredocsStructurally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.ExecutableHeredocLines) != 0 {
-		t.Fatalf("data heredoc classified executable: %v", plan.ExecutableHeredocLines)
+	if len(plan.Heredocs) != 1 || plan.Heredocs[0].Executable {
+		t.Fatalf("data heredoc classification = %#v, want one non-executable redirect", plan.Heredocs)
+	}
+}
+
+func TestParseShellPlanBindsMixedHeredocsToExactRedirections(t *testing.T) {
+	for _, source := range []string{
+		"cat <<'DATA'; bash <<'CODE'\nmentioned\nDATA\nexecuted\nCODE",
+		"bash <<'CODE'; cat <<'DATA'\nexecuted\nCODE\nmentioned\nDATA",
+	} {
+		plan, err := canonical.ParseShellPlan(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Heredocs) != 2 || plan.Heredocs[0].Executable == plan.Heredocs[1].Executable {
+			t.Fatalf("mixed heredocs = %#v, want distinct ordered classifications", plan.Heredocs)
+		}
+		if plan.Heredocs[0].OperatorOffset == plan.Heredocs[1].OperatorOffset {
+			t.Fatalf("mixed heredocs share operator identity: %#v", plan.Heredocs)
+		}
 	}
 }

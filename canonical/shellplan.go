@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -33,12 +34,21 @@ type ShellInvocation struct {
 	Span             SourceSpan
 }
 
+// ShellHeredoc binds a here-document to its exact parsed redirection. Multiple
+// redirections may share a source line but have different execution semantics.
+type ShellHeredoc struct {
+	OperatorOffset uint
+	Line           uint
+	Delimiter      string
+	Executable     bool
+}
+
 // ShellPlan is the versioned, non-executing interpretation used by Bash rules.
 type ShellPlan struct {
-	SourceDigest           string
-	ParserVersion          string
-	Invocations            []ShellInvocation
-	ExecutableHeredocLines []uint
+	SourceDigest  string
+	ParserVersion string
+	Invocations   []ShellInvocation
+	Heredocs      []ShellHeredoc
 }
 
 // ParseShellPlan parses Bash source without expansion or execution. A command
@@ -88,6 +98,9 @@ func ParseShellPlan(source string) (ShellPlan, error) {
 		appendWrappedInvocations(&plan, source[start:end], SourceSpan{Start: start, End: end}, executable, arguments, argumentLiterals)
 		return true
 	})
+	sort.Slice(plan.Heredocs, func(i, j int) bool {
+		return plan.Heredocs[i].OperatorOffset < plan.Heredocs[j].OperatorOffset
+	})
 	return plan, nil
 }
 
@@ -112,18 +125,21 @@ func collectExecutableHeredocs(plan *ShellPlan, stmt *syntax.Stmt) {
 		}
 		executable, arguments, literals = innerExecutable, innerArguments, innerLiterals
 	}
-	if !isExecutableHeredocInterpreter(filepath.Base(executable)) {
-		return
-	}
+	executableHeredoc := isExecutableHeredocInterpreter(filepath.Base(executable))
 	for _, redirect := range stmt.Redirs {
 		if redirect.Op != syntax.Hdoc && redirect.Op != syntax.DashHdoc {
 			continue
 		}
-		line := redirect.OpPos.Line()
-		if line == 0 || containsLine(plan.ExecutableHeredocLines, line) {
+		delimiter, literal := literalWord(redirect.Word)
+		if !literal || delimiter == "" {
 			continue
 		}
-		plan.ExecutableHeredocLines = append(plan.ExecutableHeredocLines, line)
+		plan.Heredocs = append(plan.Heredocs, ShellHeredoc{
+			OperatorOffset: redirect.OpPos.Offset(),
+			Line:           redirect.OpPos.Line(),
+			Delimiter:      delimiter,
+			Executable:     executableHeredoc,
+		})
 	}
 }
 
@@ -134,15 +150,6 @@ func isExecutableHeredocInterpreter(executable string) bool {
 	default:
 		return false
 	}
-}
-
-func containsLine(lines []uint, target uint) bool {
-	for _, line := range lines {
-		if line == target {
-			return true
-		}
-	}
-	return false
 }
 
 func appendWrappedInvocations(plan *ShellPlan, source string, span SourceSpan, executable string, arguments []string, literals []bool) {
