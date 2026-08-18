@@ -41,6 +41,8 @@ on_error = "abstain"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['git']
+subcommand = 'reset'
 input  = 'git\s+reset\s+--hard'
 decision = "deny"
 reason = "Destructive: git reset --hard"
@@ -49,6 +51,8 @@ reason = "Destructive: git reset --hard"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['git']
+subcommand = 'clean'
 input  = 'git\s+clean\s+(-[a-zA-Z]*f|--force)'
 decision = "deny"
 reason = "Destructive: git clean with force"
@@ -57,6 +61,8 @@ reason = "Destructive: git clean with force"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['git']
+subcommand = 'push'
 input  = '(?:^|[\n|;&(`])[\t ]*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+)(?:[ \t]|\\\r?\n)+|(?:command|nice|nohup)(?:[ \t]|\\\r?\n)+|sudo(?:[ \t]|\\\r?\n)+(?:(?:(?:-u|--user)(?:[ \t]|\\\r?\n)+\S+|-E)(?:[ \t]|\\\r?\n)+)*|timeout(?:[ \t]|\\\r?\n)+(?:-[^ \t\r\n]+(?:[ \t]|\\\r?\n)+)*[^ \t\r\n]+(?:[ \t]|\\\r?\n)+|env(?:[ \t]|\\\r?\n)+(?:(?:(?:-u|-C)(?:[ \t]|\\\r?\n)+\S+|--(?:unset|chdir)=\S+|-[^ \t\r\n]+)(?:[ \t]|\\\r?\n)+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+(?:[ \t]|\\\r?\n)+)*)*(?:\S*/)?git(?:(?:[ \t]|\\\r?\n)+(?:-C(?:(?:[ \t]|\\\r?\n)+\S+|[^ \t\r\n]+)|-c(?:[ \t]|\\\r?\n)+\S+|--no-pager|--paginate|--no-replace-objects|--git-dir(?:=\S+|(?:[ \t]|\\\r?\n)+\S+)|--work-tree(?:=\S+|(?:[ \t]|\\\r?\n)+\S+)))*(?:[ \t]|\\\r?\n)+push\b(?:(?:\\\r?\n)|[^|;&\n])*?(?:[ \t]|\\\r?\n)+(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?|\x22(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x22|\x27(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x27)(?=[ \t]|\\\r?\n|$|[|;&)\x60])'
 decision = "deny"
 reason = "Destructive: git force push"
@@ -68,6 +74,8 @@ reason = "Destructive: git force push"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['git']
+subcommand = 'commit'
 input  = 'git\s+commit\s+.*--amend'
 decision = "deny"
 reason = "Destructive: git commit --amend"
@@ -77,6 +85,8 @@ reason = "Destructive: git commit --amend"
 # Force-delete a branch
 [[rules]]
 tool   = 'Bash'
+executables = ['git']
+subcommand = 'branch'
 input  = 'git\s+branch\s+(-[a-zA-Z]*D|--delete\s+--force)'
 decision = "deny"
 reason = "Destructive: git branch force-delete"
@@ -107,6 +117,8 @@ reason = "Destructive: git branch force-delete"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['git']
+subcommand = 'push'
 input  = 'git\s+(?:-C\s+\S+\s+)*push\b[^|;&]*(?:[\s:+](main|master)(?=\s|$|:)|\brefs/heads/(main|master)(?=\s|$|:))'
 decision = "deny"
 reason = "Push to protected branch (main/master)"
@@ -121,6 +133,8 @@ reason = "Push to protected branch (main/master)"
 
 [[rules]]
 tool              = 'Bash'
+executables       = ['git']
+subcommand        = 'push'
 input             = '\bgit\s+push\b(?!.*\b(main|master)\b)'
 precondition      = 'git branch --show-current'
 precondition_match = '^(main|master)$'
@@ -170,6 +184,7 @@ reason = "Remove files in build output directory"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['rm']
 input  = '\brm\s+(-[a-zA-Z]*r|--recursive)\S*\s+(?!(\./?)?(dist|build|out|\.next|node_modules|__pycache__|\.cache|\.turbo|target|\.parcel-cache)($|&&|\||;))'
 decision = "deny"
 reason = "Destructive: recursive delete (rm -r)"
@@ -182,6 +197,7 @@ reason = "Destructive: recursive delete (rm -r)"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['sed', 'awk']
 input  = '\b(?:sed|awk)\s'
 decision = "deny"
 reason = "Use the Edit tool instead of sed/awk"
@@ -224,6 +240,7 @@ reason = "Credential/secret file access denied"
 
 [[rules]]
 tool   = 'Bash'
+executables = ['cat', 'less', 'more', 'head', 'tail', 'bat']
 input  = '(?:cat|less|more|head|tail|bat)\s+\S*(\.env\b|\.envrc|key\.json|id_rsa|id_ed25519|\.pem\b|credentials\b|\.secret)'
 decision = "deny"
 reason = "Reading credential/secret file via shell"

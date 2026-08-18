@@ -88,6 +88,20 @@ type Verdict struct {
 	// Rules identifies the matching policy rules behind this verdict. It is
 	// additive metadata for adapters that want to explain a decision.
 	Rules []RuleProvenance
+	// ShellMatches binds a Bash decision to the parsed operation and parser
+	// provenance that produced it. It is empty for non-Bash and legacy rules.
+	ShellMatches []ShellMatchProvenance
+}
+
+// ShellMatchProvenance makes description-only controls auditable: consumers
+// can see which parsed executable, exact subcommand and source span fired.
+type ShellMatchProvenance struct {
+	InvocationID  string
+	Executable    string
+	Subcommand    string
+	Span          SourceSpan
+	SourceDigest  string
+	ParserVersion string
 }
 
 // RuleProvenance identifies a rule's source file and 1-based index within it.
