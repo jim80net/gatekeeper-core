@@ -57,11 +57,11 @@ reason = "Destructive: git clean with force"
 
 [[rules]]
 tool   = 'Bash'
-input  = '(?:^|[\n|;&(`])[\t ]*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+|sudo)(?:[ \t]|\\\r?\n)+|timeout(?:[ \t]|\\\r?\n)+(?:-[^ \t\r\n]+(?:[ \t]|\\\r?\n)+)*[^ \t\r\n]+(?:[ \t]|\\\r?\n)+|env(?:[ \t]|\\\r?\n)+(?:[A-Za-z_][A-Za-z0-9_]*=\S+(?:[ \t]|\\\r?\n)+)*)*(?:\S*/)?git(?:(?:[ \t]|\\\r?\n)+(?:-C(?:[ \t]|\\\r?\n)+\S+|--no-pager))*(?:[ \t]|\\\r?\n)+push\b(?:(?:\\\r?\n)|[^|;&\n])*?(?:[ \t]|\\\r?\n)+(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?|\x22(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x22|\x27(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x27)(?=[ \t]|\\\r?\n|$|[|;&])'
+input  = '(?:^|[\n|;&(`])[\t ]*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+)(?:[ \t]|\\\r?\n)+|sudo(?:[ \t]|\\\r?\n)+(?:(?:-u|--user)(?:[ \t]|\\\r?\n)+\S+(?:[ \t]|\\\r?\n)+)*|timeout(?:[ \t]|\\\r?\n)+(?:-[^ \t\r\n]+(?:[ \t]|\\\r?\n)+)*[^ \t\r\n]+(?:[ \t]|\\\r?\n)+|env(?:[ \t]|\\\r?\n)+(?:-[^ \t\r\n]+(?:[ \t]|\\\r?\n)+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+(?:[ \t]|\\\r?\n)+)*)*(?:\S*/)?git(?:(?:[ \t]|\\\r?\n)+(?:-C(?:(?:[ \t]|\\\r?\n)+\S+|[^ \t\r\n]+)|-c(?:[ \t]|\\\r?\n)+\S+|--no-pager|--paginate|--no-replace-objects|--git-dir=\S+|--work-tree=\S+))*(?:[ \t]|\\\r?\n)+push\b(?:(?:\\\r?\n)|[^|;&\n])*?(?:[ \t]|\\\r?\n)+(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?|\x22(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x22|\x27(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x27)(?=[ \t]|\\\r?\n|$|[|;&])'
 decision = "deny"
 reason = "Destructive: git force push"
 # Match only a recognized command position, selected wrappers/path prefixes, and
-# Git's -C/--no-pager global-option forms. Escaped newlines are shell whitespace;
+# Git's reviewed command-admitting global-option forms. Escaped newlines are shell whitespace;
 # real separators remain boundaries. Short clusters admit only no-argument push
 # flags, so a push-option value such as -ofoo is not mistaken for force.
 # Derived from gatekeeper-claude PR #45 (e0e9998) and exact-head PR #17 review.
