@@ -57,11 +57,14 @@ reason = "Destructive: git clean with force"
 
 [[rules]]
 tool   = 'Bash'
-input  = 'git\s+push\s+(-[a-zA-Z]*f|--force|--force-with-lease)'
+input  = '(?:^|[\n|;&(`])[\t ]*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+)(?:[ \t]|\\\r?\n)+|(?:command|nice|nohup)(?:[ \t]|\\\r?\n)+|sudo(?:[ \t]|\\\r?\n)+(?:(?:(?:-u|--user)(?:[ \t]|\\\r?\n)+\S+|-E)(?:[ \t]|\\\r?\n)+)*|timeout(?:[ \t]|\\\r?\n)+(?:-[^ \t\r\n]+(?:[ \t]|\\\r?\n)+)*[^ \t\r\n]+(?:[ \t]|\\\r?\n)+|env(?:[ \t]|\\\r?\n)+(?:(?:(?:-u|-C)(?:[ \t]|\\\r?\n)+\S+|--(?:unset|chdir)=\S+|-[^ \t\r\n]+)(?:[ \t]|\\\r?\n)+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+(?:[ \t]|\\\r?\n)+)*)*(?:\S*/)?git(?:(?:[ \t]|\\\r?\n)+(?:-C(?:(?:[ \t]|\\\r?\n)+\S+|[^ \t\r\n]+)|-c(?:[ \t]|\\\r?\n)+\S+|--no-pager|--paginate|--no-replace-objects|--git-dir(?:=\S+|(?:[ \t]|\\\r?\n)+\S+)|--work-tree(?:=\S+|(?:[ \t]|\\\r?\n)+\S+)))*(?:[ \t]|\\\r?\n)+push\b(?:(?:\\\r?\n)|[^|;&\n])*?(?:[ \t]|\\\r?\n)+(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?|\x22(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x22|\x27(?:-[uvqdn]*f[uvqdnf]*|--force(?:-with-lease)?(?:=\S+)?)\x27)(?=[ \t]|\\\r?\n|$|[|;&)\x60])'
 decision = "deny"
 reason = "Destructive: git force push"
-# env-prefix aware:
-# input = '(\w+=\S+\s+)*git\s+push\s+(-[a-zA-Z]*f|--force|--force-with-lease)'
+# Match only a recognized command position, selected wrappers/path prefixes, and
+# Git's reviewed command-admitting global-option forms. Escaped newlines are shell whitespace;
+# real separators remain boundaries. Short clusters admit only no-argument push
+# flags, so a push-option value such as -ofoo is not mistaken for force.
+# Derived from gatekeeper-claude PR #45 (e0e9998) and exact-head PR #17 review.
 
 [[rules]]
 tool   = 'Bash'
