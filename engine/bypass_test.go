@@ -146,6 +146,11 @@ func TestForcePushFlagPositionBypassesDenied(t *testing.T) {
 		"git --git-dir=/tmp/x.git push origin feature -f",
 		"git --work-tree=/tmp push origin feature -f",
 		"sudo -u user git push origin feature -f",
+		"env -i git push --force",
+		"sudo -u user git push --force",
+		"command git push --force",
+		"nice git push --force",
+		"nohup git push --force",
 	}
 	for _, cmd := range denied {
 		t.Run(cmd, func(t *testing.T) {
