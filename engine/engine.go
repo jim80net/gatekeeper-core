@@ -93,16 +93,20 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 
 		var shellMatch *canonical.ShellMatchProvenance
 		p0HeredocMatch := false
+		opaqueShellMatch := false
 		if tc.Tool == canonical.ToolBash && len(rule.Executables) > 0 && shellPlanErr == nil {
 			shellMatch = matchShellInvocation(rule, shellPlan)
+			if shellMatch == nil {
+				opaqueShellMatch = matchOpaqueShellInvocation(rule, shellPlan)
+			}
 			if shellMatch == nil && hasExecutableHeredoc(shellPlan) {
 				// Deliberate P0: executable heredoc bodies remain on the legacy
 				// raw-text backstop until their interpreter semantics are classified.
 				matched, matchErr := rule.InputRegex.MatchString(matchStr)
 				p0HeredocMatch = matchErr == nil && matched
 			}
-			if shellMatch == nil && !p0HeredocMatch {
-				if !hasLegacyExecutionHandoff(shellPlan) {
+			if shellMatch == nil && !p0HeredocMatch && !opaqueShellMatch {
+				if !requiresLegacyRuleFallback(shellPlan) {
 					continue
 				}
 				// Stage-one compatibility: executor handoffs that ShellPlan does
@@ -176,8 +180,37 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 func hasLegacyExecutionHandoff(plan canonical.ShellPlan) bool {
 	for _, invocation := range plan.Invocations {
 		switch invocation.Executable {
-		case "bash", "sh", "dash", "zsh", "ksh", "fish", "eval", "xargs", "find", "sudo":
+		case "bash", "sh", "dash", "zsh", "ksh", "fish", "python", "python2", "python3", "ruby", "perl", "node", "php", "eval", "xargs", "find", "sudo", "env":
 			return true
+		}
+	}
+	return false
+}
+
+func requiresLegacyRuleFallback(plan canonical.ShellPlan) bool {
+	return hasLegacyExecutionHandoff(plan) || hasOpaqueGitGlobalValue(plan)
+}
+
+func hasOpaqueGitGlobalValue(plan canonical.ShellPlan) bool {
+	for _, invocation := range plan.Invocations {
+		if invocation.Executable != "git" {
+			continue
+		}
+		for i := 0; i < len(invocation.Arguments); i++ {
+			if !invocation.ArgumentLiterals[i] {
+				break
+			}
+			argument := invocation.Arguments[i]
+			if gitGlobalTakesValue(argument) {
+				if i+1 >= len(invocation.Arguments) || !invocation.ArgumentLiterals[i+1] {
+					return true
+				}
+				i++
+				continue
+			}
+			if argument == "--" || (!strings.HasPrefix(argument, "-") && !isAttachedGitGlobal(argument) && !isCommandAdmittingGitGlobal(argument)) {
+				break
+			}
 		}
 	}
 	return false
@@ -237,6 +270,22 @@ func matchShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) *c
 	return nil
 }
 
+func matchOpaqueShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) bool {
+	for _, opaque := range plan.OpaqueInvocations {
+		for executable := range rule.Executables {
+			candidate := canonical.ShellPlan{Invocations: []canonical.ShellInvocation{{
+				Executable:       executable,
+				Arguments:        opaque.Arguments,
+				ArgumentLiterals: opaque.ArgumentLiterals,
+			}}}
+			if matchShellInvocation(rule, candidate) != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
 	if invocation.Executable != "git" {
 		if len(invocation.Arguments) > 0 && invocation.ArgumentLiterals[0] {
@@ -258,7 +307,7 @@ func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
 			}
 			return "", -1
 		}
-		if arg == "-C" || arg == "-c" || arg == "--git-dir" || arg == "--work-tree" || arg == "--namespace" || arg == "--exec-path" {
+		if gitGlobalTakesValue(arg) {
 			if i+1 >= len(invocation.Arguments) || !invocation.ArgumentLiterals[i+1] {
 				return "", -1
 			}
@@ -277,6 +326,15 @@ func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
 		return arg, i
 	}
 	return "", -1
+}
+
+func gitGlobalTakesValue(argument string) bool {
+	switch argument {
+	case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path":
+		return true
+	default:
+		return false
+	}
 }
 
 func isTerminalGitGlobal(argument string) bool {

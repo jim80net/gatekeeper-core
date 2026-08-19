@@ -49,17 +49,19 @@ func TestParseShellPlanUnwrapsClosedLiteralWrappers(t *testing.T) {
 }
 
 func TestParseShellPlanUnwrapsNice(t *testing.T) {
-	plan, err := canonical.ParseShellPlan(`nice git push --force`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"nice", "git"}
-	if len(plan.Invocations) != len(want) {
-		t.Fatalf("invocations = %#v, want %v", plan.Invocations, want)
-	}
-	for i := range want {
-		if plan.Invocations[i].Executable != want[i] {
-			t.Fatalf("invocation %d executable = %q, want %q", i, plan.Invocations[i].Executable, want[i])
+	for _, source := range []string{`nice git push --force`, `nice -n 5 git push --force`, `nice -5 git push --force`} {
+		plan, err := canonical.ParseShellPlan(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"nice", "git"}
+		if len(plan.Invocations) != len(want) {
+			t.Fatalf("ParseShellPlan(%q) invocations = %#v, want %v", source, plan.Invocations, want)
+		}
+		for i := range want {
+			if plan.Invocations[i].Executable != want[i] {
+				t.Fatalf("ParseShellPlan(%q) invocation %d executable = %q, want %q", source, i, plan.Invocations[i].Executable, want[i])
+			}
 		}
 	}
 }

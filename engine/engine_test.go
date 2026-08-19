@@ -515,15 +515,34 @@ func TestInterpreterHandoffRetainsLegacyVerdictWithoutParsedClaim(t *testing.T) 
 		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
 		Decision: "deny", Reason: "recursive delete",
 	}})
-	verdict, err := eng.Evaluate(bashInput(`bash -c 'rm -rf /actual'`))
+	for _, command := range []string{`bash -c 'rm -rf /actual'`, `python3 -c 'print("rm -rf /actual")'`} {
+		verdict, err := eng.Evaluate(bashInput(command))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verdict.Decision != canonical.Deny || verdict.Reason != "recursive delete" {
+			t.Fatalf("%q verdict = %#v, want retained legacy denial", command, verdict)
+		}
+		if len(verdict.ShellMatches) != 0 {
+			t.Fatalf("legacy handoff must not claim parsed operation: %#v", verdict.ShellMatches)
+		}
+	}
+}
+
+func TestOpaqueExecutableRetainsConservativeDenyWithoutParsedClaim(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	verdict, err := eng.Evaluate(bashInput(`cmd=rm; $cmd -rf /actual`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if verdict.Decision != canonical.Deny || verdict.Reason != "recursive delete" {
-		t.Fatalf("verdict = %#v, want retained legacy denial", verdict)
+		t.Fatalf("opaque executable verdict = %#v, want retained denial", verdict)
 	}
 	if len(verdict.ShellMatches) != 0 {
-		t.Fatalf("legacy handoff must not claim parsed operation: %#v", verdict.ShellMatches)
+		t.Fatalf("opaque executable must not claim parsed provenance: %#v", verdict.ShellMatches)
 	}
 }
 

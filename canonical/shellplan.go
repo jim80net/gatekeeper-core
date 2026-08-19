@@ -34,6 +34,16 @@ type ShellInvocation struct {
 	Span             SourceSpan
 }
 
+// OpaqueShellInvocation records a simple command whose executable is dynamic.
+// Its literal arguments remain available for conservative rule evaluation, but
+// it can never produce parsed executable provenance.
+type OpaqueShellInvocation struct {
+	Arguments        []string
+	ArgumentLiterals []bool
+	Source           string
+	Span             SourceSpan
+}
+
 // ShellHeredoc binds a here-document to its exact parsed redirection. Multiple
 // redirections may share a source line but have different execution semantics.
 type ShellHeredoc struct {
@@ -45,10 +55,11 @@ type ShellHeredoc struct {
 
 // ShellPlan is the versioned, non-executing interpretation used by Bash rules.
 type ShellPlan struct {
-	SourceDigest  string
-	ParserVersion string
-	Invocations   []ShellInvocation
-	Heredocs      []ShellHeredoc
+	SourceDigest      string
+	ParserVersion     string
+	Invocations       []ShellInvocation
+	OpaqueInvocations []OpaqueShellInvocation
+	Heredocs          []ShellHeredoc
 }
 
 // ParseShellPlan parses Bash source without expansion or execution. A command
@@ -76,6 +87,20 @@ func ParseShellPlan(source string) (ShellPlan, error) {
 		}
 		executable, ok := literalWord(call.Args[0])
 		if !ok {
+			arguments := make([]string, len(call.Args)-1)
+			argumentLiterals := make([]bool, len(call.Args)-1)
+			for i, word := range call.Args[1:] {
+				arguments[i], argumentLiterals[i] = literalWord(word)
+			}
+			start, end := call.Pos().Offset(), call.End().Offset()
+			if start <= uint(len(source)) && end <= uint(len(source)) && end >= start {
+				plan.OpaqueInvocations = append(plan.OpaqueInvocations, OpaqueShellInvocation{
+					Arguments:        arguments,
+					ArgumentLiterals: argumentLiterals,
+					Source:           source[start:end],
+					Span:             SourceSpan{Start: start, End: end},
+				})
+			}
 			return true
 		}
 		arguments := make([]string, len(call.Args)-1)
@@ -209,6 +234,9 @@ func unwrapLiteralWrapper(executable string, arguments []string, literals []bool
 			if strings.HasPrefix(argument, "--adjustment=") {
 				continue
 			}
+			if isNiceNumericAdjustment(argument) {
+				continue
+			}
 			if strings.HasPrefix(argument, "-") {
 				return "", nil, nil, false
 			}
@@ -269,6 +297,18 @@ func unwrapLiteralWrapper(executable string, arguments []string, literals []bool
 		return "", nil, nil, false
 	}
 	return arguments[commandAt], arguments[commandAt+1:], literals[commandAt+1:], true
+}
+
+func isNiceNumericAdjustment(argument string) bool {
+	if len(argument) < 2 || argument[0] != '-' {
+		return false
+	}
+	for _, r := range argument[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func literalWord(word *syntax.Word) (string, bool) {
