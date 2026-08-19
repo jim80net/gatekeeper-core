@@ -150,7 +150,11 @@ func collectExecutableHeredocs(plan *ShellPlan, stmt *syntax.Stmt) {
 		}
 		executable, arguments, literals = innerExecutable, innerArguments, innerLiterals
 	}
-	executableHeredoc := isExecutableHeredocInterpreter(filepath.Base(executable))
+	// Executable is the historical field name for the conservative body-retention
+	// bit. Preserve the body unless the resolved consumer is proved to consume
+	// data: unknown wrappers and executables must not turn code into an inert
+	// mention merely because ShellPlan cannot classify them yet.
+	executableHeredoc := !isProvedDataHeredocConsumer(filepath.Base(executable))
 	for _, redirect := range stmt.Redirs {
 		if redirect.Op != syntax.Hdoc && redirect.Op != syntax.DashHdoc {
 			continue
@@ -168,9 +172,9 @@ func collectExecutableHeredocs(plan *ShellPlan, stmt *syntax.Stmt) {
 	}
 }
 
-func isExecutableHeredocInterpreter(executable string) bool {
+func isProvedDataHeredocConsumer(executable string) bool {
 	switch executable {
-	case "bash", "sh", "dash", "zsh", "ksh", "fish", "python", "python2", "python3", "ruby", "perl", "node", "php":
+	case "cat":
 		return true
 	default:
 		return false
