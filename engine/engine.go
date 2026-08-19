@@ -271,6 +271,9 @@ func matchShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) *c
 }
 
 func matchOpaqueShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) bool {
+	if rule.Decision != canonical.Deny {
+		return false
+	}
 	for _, opaque := range plan.OpaqueInvocations {
 		for executable := range rule.Executables {
 			candidate := canonical.ShellPlan{Invocations: []canonical.ShellInvocation{{

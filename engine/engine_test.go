@@ -546,6 +546,23 @@ func TestOpaqueExecutableRetainsConservativeDenyWithoutParsedClaim(t *testing.T)
 	}
 }
 
+func TestOpaqueExecutableNeverManufacturesAllow(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"git"}, Subcommand: "push",
+		Input: `git\s+push.*--force`, Decision: "allow", Reason: "allow force push",
+	}})
+	verdict, err := eng.Evaluate(bashInput(`cmd=git; $cmd push --force`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Decision != canonical.Abstain {
+		t.Fatalf("opaque executable allow verdict = %#v, want abstain", verdict)
+	}
+	if len(verdict.ShellMatches) != 0 {
+		t.Fatalf("opaque executable must not manufacture allow provenance: %#v", verdict.ShellMatches)
+	}
+}
+
 func TestUnknownWrapperRetainsLegacyVerdictWithoutParsedClaim(t *testing.T) {
 	eng := newEngine(t, []config.Rule{{
 		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
