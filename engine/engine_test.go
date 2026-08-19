@@ -715,6 +715,28 @@ func TestUnknownHeredocConsumersPreserveBodiesForNamedP0(t *testing.T) {
 	}
 }
 
+func TestDynamicHeredocConsumersPreserveBodiesForNamedP0(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	for _, consumer := range []string{"bash", "python", "cat"} {
+		command := "cmd=" + consumer + "; $cmd <<'EOF'\nrm -rf /actual\nEOF"
+		t.Run(consumer, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny || verdict.Reason != engine.P0ExecutableHeredocReason {
+				t.Fatalf("verdict = %#v, want named heredoc P0", verdict)
+			}
+			if len(verdict.ShellMatches) != 0 {
+				t.Fatalf("dynamic heredoc P0 claimed parsed operation: %#v", verdict.ShellMatches)
+			}
+		})
+	}
+}
+
 func TestMixedSameLineHeredocsUseExactRedirectionClassification(t *testing.T) {
 	eng := newEngine(t, []config.Rule{{
 		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,

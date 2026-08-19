@@ -111,6 +111,19 @@ func TestParseShellPlanClassifiesExecutableHeredocsStructurally(t *testing.T) {
 	}
 }
 
+func TestParseShellPlanPreservesDynamicConsumerHeredocs(t *testing.T) {
+	for _, consumer := range []string{"bash", "python", "cat"} {
+		source := "cmd=" + consumer + "; $cmd <<'EOF'\nrm -rf /actual\nEOF"
+		plan, err := canonical.ParseShellPlan(source)
+		if err != nil {
+			t.Fatalf("ParseShellPlan(%q): %v", source, err)
+		}
+		if len(plan.Heredocs) != 1 || !plan.Heredocs[0].Executable {
+			t.Fatalf("ParseShellPlan(%q) heredocs = %#v, want one preserved redirect", source, plan.Heredocs)
+		}
+	}
+}
+
 func TestParseShellPlanBindsMixedHeredocsToExactRedirections(t *testing.T) {
 	for _, source := range []string{
 		"cat <<'DATA'; bash <<'CODE'\nmentioned\nDATA\nexecuted\nCODE",
