@@ -46,8 +46,8 @@ provenance. Quoted data in another command cannot manufacture an invocation.
 Rules without `executables` retain legacy whole-input matching for compatibility
 and should not be used for new Bash deny policy.
 
-The closed literal-wrapper set currently unwraps `env`, `command`, `nohup`, and
-`timeout`. Interpreter and executor handoffs not yet resolved by that set retain
+The closed literal-wrapper set currently unwraps `env`, `command`, `nice`, `nohup`,
+and `timeout`. Interpreter and executor handoffs not yet resolved by that set retain
 their legacy verdict during the staged rollout and carry no `ShellMatches`
 entry; consumers must not restate those decisions as parsed-operation proof.
 

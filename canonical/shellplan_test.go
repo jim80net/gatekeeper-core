@@ -49,7 +49,14 @@ func TestParseShellPlanUnwrapsClosedLiteralWrappers(t *testing.T) {
 }
 
 func TestParseShellPlanUnwrapsNice(t *testing.T) {
-	for _, source := range []string{`nice git push --force`, `nice -n 5 git push --force`, `nice -5 git push --force`} {
+	for _, source := range []string{
+		`nice git push --force`,
+		`nice -n 5 git push --force`,
+		`nice -5 git push --force`,
+		`nice -n5 git push --force`,
+		`nice -n-5 git push --force`,
+		`nice -n+5 git push --force`,
+	} {
 		plan, err := canonical.ParseShellPlan(source)
 		if err != nil {
 			t.Fatal(err)

@@ -162,6 +162,9 @@ func TestForcePushFlagPositionBypassesDenied(t *testing.T) {
 		"env -C /tmp git push --force",
 		"sudo -E git push --force",
 		"nice -5 git push --force",
+		"nice -n5 git push --force",
+		"nice -n-5 git push --force",
+		"nice -n+5 git push --force",
 		"env -S git push --force",
 		"git -C $dir push --force origin",
 	}

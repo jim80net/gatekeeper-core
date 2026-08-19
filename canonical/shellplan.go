@@ -237,6 +237,9 @@ func unwrapLiteralWrapper(executable string, arguments []string, literals []bool
 			if isNiceNumericAdjustment(argument) {
 				continue
 			}
+			if isNiceAttachedAdjustment(argument) {
+				continue
+			}
 			if strings.HasPrefix(argument, "-") {
 				return "", nil, nil, false
 			}
@@ -304,6 +307,25 @@ func isNiceNumericAdjustment(argument string) bool {
 		return false
 	}
 	for _, r := range argument[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isNiceAttachedAdjustment(argument string) bool {
+	if !strings.HasPrefix(argument, "-n") || len(argument) <= len("-n") {
+		return false
+	}
+	value := argument[len("-n"):]
+	if value[0] == '-' || value[0] == '+' {
+		value = value[1:]
+	}
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
 		if r < '0' || r > '9' {
 			return false
 		}
