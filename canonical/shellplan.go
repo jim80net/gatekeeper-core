@@ -130,27 +130,28 @@ func ParseShellPlan(source string) (ShellPlan, error) {
 }
 
 func collectExecutableHeredocs(plan *ShellPlan, stmt *syntax.Stmt) {
+	executableHeredoc := true
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Args) == 0 {
-		return
-	}
-	executable, ok := literalWord(call.Args[0])
-	if !ok {
-		return
-	}
-	arguments := make([]string, len(call.Args)-1)
-	literals := make([]bool, len(call.Args)-1)
-	for i, word := range call.Args[1:] {
-		arguments[i], literals[i] = literalWord(word)
-	}
-	for depth := 0; depth < 8; depth++ {
-		innerExecutable, innerArguments, innerLiterals, unwrapped := unwrapLiteralWrapper(executable, arguments, literals)
-		if !unwrapped {
-			break
+	if ok && len(call.Args) > 0 {
+		executable, literal := literalWord(call.Args[0])
+		if literal {
+			arguments := make([]string, len(call.Args)-1)
+			literals := make([]bool, len(call.Args)-1)
+			for i, word := range call.Args[1:] {
+				arguments[i], literals[i] = literalWord(word)
+			}
+			for depth := 0; depth < 8; depth++ {
+				innerExecutable, innerArguments, innerLiterals, unwrapped := unwrapLiteralWrapper(executable, arguments, literals)
+				if !unwrapped {
+					break
+				}
+				executable, arguments, literals = innerExecutable, innerArguments, innerLiterals
+			}
+			// Executable is the historical field name for the conservative
+			// body-retention bit. Only a proved data consumer may clear it.
+			executableHeredoc = !isProvedDataHeredocConsumer(filepath.Base(executable))
 		}
-		executable, arguments, literals = innerExecutable, innerArguments, innerLiterals
 	}
-	executableHeredoc := isExecutableHeredocInterpreter(filepath.Base(executable))
 	for _, redirect := range stmt.Redirs {
 		if redirect.Op != syntax.Hdoc && redirect.Op != syntax.DashHdoc {
 			continue
@@ -168,9 +169,9 @@ func collectExecutableHeredocs(plan *ShellPlan, stmt *syntax.Stmt) {
 	}
 }
 
-func isExecutableHeredocInterpreter(executable string) bool {
+func isProvedDataHeredocConsumer(executable string) bool {
 	switch executable {
-	case "bash", "sh", "dash", "zsh", "ksh", "fish", "python", "python2", "python3", "ruby", "perl", "node", "php":
+	case "cat":
 		return true
 	default:
 		return false

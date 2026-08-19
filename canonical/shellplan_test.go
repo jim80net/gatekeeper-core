@@ -80,6 +80,10 @@ func TestParseShellPlanClassifiesExecutableHeredocsStructurally(t *testing.T) {
 		"echo before; bash <<'EOF'\necho ok\nEOF",
 		"printf x | /bin/bash -s <<'EOF'\necho ok\nEOF",
 		"env FOO=bar timeout 5 nohup /bin/bash -s <<'EOF'\necho ok\nEOF",
+		"sudo python <<'EOF'\necho ok\nEOF",
+		"nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\necho ok\nEOF",
+		"bun <<'EOF'\necho ok\nEOF",
+		"timeout 5 tclsh <<'EOF'\necho ok\nEOF",
 	} {
 		plan, err := canonical.ParseShellPlan(source)
 		if err != nil {
@@ -96,6 +100,27 @@ func TestParseShellPlanClassifiesExecutableHeredocsStructurally(t *testing.T) {
 	}
 	if len(plan.Heredocs) != 1 || plan.Heredocs[0].Executable {
 		t.Fatalf("data heredoc classification = %#v, want one non-executable redirect", plan.Heredocs)
+	}
+
+	plan, err = canonical.ParseShellPlan("timeout 5 cat <<'EOF'\necho data\nEOF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Heredocs) != 1 || plan.Heredocs[0].Executable {
+		t.Fatalf("wrapped data heredoc classification = %#v, want one non-executable redirect", plan.Heredocs)
+	}
+}
+
+func TestParseShellPlanPreservesDynamicConsumerHeredocs(t *testing.T) {
+	for _, consumer := range []string{"bash", "python", "cat"} {
+		source := "cmd=" + consumer + "; $cmd <<'EOF'\nrm -rf /actual\nEOF"
+		plan, err := canonical.ParseShellPlan(source)
+		if err != nil {
+			t.Fatalf("ParseShellPlan(%q): %v", source, err)
+		}
+		if len(plan.Heredocs) != 1 || !plan.Heredocs[0].Executable {
+			t.Fatalf("ParseShellPlan(%q) heredocs = %#v, want one preserved redirect", source, plan.Heredocs)
+		}
 	}
 }
 

@@ -689,6 +689,54 @@ func TestExecutableHeredocP0CoversPathsOptionsAndComposition(t *testing.T) {
 	}
 }
 
+func TestUnknownHeredocConsumersPreserveBodiesForNamedP0(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	for _, command := range []string{
+		"sudo python <<'EOF'\nrm -rf /actual\nEOF",
+		"nice -n 10 stdbuf -oL /usr/bin/python3.12 <<'EOF'\nrm -rf /actual\nEOF",
+		"bun <<'EOF'\nrm -rf /actual\nEOF",
+		"timeout 5 tclsh <<'EOF'\nrm -rf /actual\nEOF",
+	} {
+		t.Run(command, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny || verdict.Reason != engine.P0ExecutableHeredocReason {
+				t.Fatalf("verdict = %#v, want named heredoc P0", verdict)
+			}
+			if len(verdict.ShellMatches) != 0 {
+				t.Fatalf("heredoc P0 claimed parsed operation: %#v", verdict.ShellMatches)
+			}
+		})
+	}
+}
+
+func TestDynamicHeredocConsumersPreserveBodiesForNamedP0(t *testing.T) {
+	eng := newEngine(t, []config.Rule{{
+		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
+		Decision: "deny", Reason: "recursive delete",
+	}})
+	for _, consumer := range []string{"bash", "python", "cat"} {
+		command := "cmd=" + consumer + "; $cmd <<'EOF'\nrm -rf /actual\nEOF"
+		t.Run(consumer, func(t *testing.T) {
+			verdict, err := eng.Evaluate(bashInput(command))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verdict.Decision != canonical.Deny || verdict.Reason != engine.P0ExecutableHeredocReason {
+				t.Fatalf("verdict = %#v, want named heredoc P0", verdict)
+			}
+			if len(verdict.ShellMatches) != 0 {
+				t.Fatalf("dynamic heredoc P0 claimed parsed operation: %#v", verdict.ShellMatches)
+			}
+		})
+	}
+}
+
 func TestMixedSameLineHeredocsUseExactRedirectionClassification(t *testing.T) {
 	eng := newEngine(t, []config.Rule{{
 		Tool: "Bash", Executables: []string{"rm"}, Input: `\brm\s+-rf`,
