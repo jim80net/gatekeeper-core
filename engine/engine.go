@@ -48,6 +48,11 @@ func New(cfg *config.Config, debug bool) (*Engine, error) {
 // Returns a Verdict with Decision == canonical.Abstain when no rule matches.
 func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 	inputStr := tc.InputString
+	var shellPlan canonical.ShellPlan
+	var shellPlanErr error
+	if tc.Tool == canonical.ToolBash {
+		shellPlan, shellPlanErr = canonical.ParseShellPlan(inputStr)
+	}
 
 	if e.debug {
 		canonical.Debugf("evaluate: tool=%s input=%q", tc.Tool, inputStr)
@@ -67,7 +72,7 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 	// against data content (e.g., commit messages mentioning "rm -rf").
 	matchStr := inputStr
 	if tc.Tool == canonical.ToolBash {
-		matchStr = StripHeredocs(inputStr)
+		matchStr = stripHeredocsWithPlan(inputStr, shellPlan, shellPlanErr)
 		if e.debug && matchStr != inputStr {
 			canonical.Debugf("  stripped heredocs: %q", matchStr)
 		}
@@ -77,6 +82,8 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 	var denyRules []canonical.RuleProvenance
 	anyAllow := false
 	var allowRules []canonical.RuleProvenance
+	var denyShellMatches []canonical.ShellMatchProvenance
+	var allowShellMatches []canonical.ShellMatchProvenance
 
 	for _, rule := range e.rules {
 		toolMatch, err := rule.ToolRegex.MatchString(tc.Tool)
@@ -84,9 +91,39 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 			continue
 		}
 
-		inputMatch, err := rule.InputRegex.MatchString(matchStr)
-		if err != nil || !inputMatch {
-			continue
+		var shellMatch *canonical.ShellMatchProvenance
+		p0HeredocMatch := false
+		opaqueShellMatch := false
+		if tc.Tool == canonical.ToolBash && len(rule.Executables) > 0 && shellPlanErr == nil {
+			shellMatch = matchShellInvocation(rule, shellPlan)
+			if shellMatch == nil {
+				opaqueShellMatch = matchOpaqueShellInvocation(rule, shellPlan)
+			}
+			if shellMatch == nil && hasExecutableHeredoc(shellPlan) {
+				// Deliberate P0: executable heredoc bodies remain on the legacy
+				// raw-text backstop until their interpreter semantics are classified.
+				matched, matchErr := rule.InputRegex.MatchString(matchStr)
+				p0HeredocMatch = matchErr == nil && matched
+			}
+			if shellMatch == nil && !p0HeredocMatch && !opaqueShellMatch {
+				if !requiresLegacyRuleFallback(shellPlan) {
+					continue
+				}
+				// Stage-one compatibility: executor handoffs that ShellPlan does
+				// not yet unwrap retain the legacy verdict. They deliberately do
+				// not claim parsed invocation provenance.
+				inputMatch, matchErr := rule.InputRegex.MatchString(matchStr)
+				if matchErr != nil || !inputMatch {
+					continue
+				}
+			}
+		} else {
+			// Legacy rules, parse failures, and unsupported dynamic executable
+			// identities retain the pre-ShellPlan verdict during shadow rollout.
+			inputMatch, matchErr := rule.InputRegex.MatchString(matchStr)
+			if matchErr != nil || !inputMatch {
+				continue
+			}
 		}
 
 		// Check precondition if present. matchStr (heredoc-stripped for Bash)
@@ -106,21 +143,31 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 
 		switch rule.Decision {
 		case canonical.Deny:
-			denyReasons = append(denyReasons, rule.Reason)
+			if p0HeredocMatch {
+				denyReasons = append(denyReasons, P0ExecutableHeredocReason)
+			} else {
+				denyReasons = append(denyReasons, rule.Reason)
+			}
 			denyRules = append(denyRules, rule.Provenance)
+			if shellMatch != nil {
+				denyShellMatches = append(denyShellMatches, *shellMatch)
+			}
 		case canonical.Allow:
 			anyAllow = true
 			allowRules = append(allowRules, rule.Provenance)
+			if shellMatch != nil {
+				allowShellMatches = append(allowShellMatches, *shellMatch)
+			}
 		}
 	}
 
 	// Deny always wins.
 	if len(denyReasons) > 0 {
-		return canonical.Verdict{Decision: canonical.Deny, Reason: strings.Join(denyReasons, "; "), Rules: denyRules}, nil
+		return canonical.Verdict{Decision: canonical.Deny, Reason: strings.Join(denyReasons, "; "), Rules: denyRules, ShellMatches: denyShellMatches}, nil
 	}
 
 	if anyAllow {
-		return canonical.Verdict{Decision: canonical.Allow, Reason: "Approved by gatekeeper", Rules: allowRules}, nil
+		return canonical.Verdict{Decision: canonical.Allow, Reason: "Approved by gatekeeper", Rules: allowRules, ShellMatches: allowShellMatches}, nil
 	}
 
 	// No match → abstain.
@@ -128,6 +175,199 @@ func (e *Engine) Evaluate(tc *canonical.ToolCall) (canonical.Verdict, error) {
 		canonical.Debugf("  no rules matched, abstaining")
 	}
 	return canonical.Verdict{Decision: canonical.Abstain}, nil
+}
+
+func hasLegacyExecutionHandoff(plan canonical.ShellPlan) bool {
+	for _, invocation := range plan.Invocations {
+		switch invocation.Executable {
+		case "bash", "sh", "dash", "zsh", "ksh", "fish", "python", "python2", "python3", "ruby", "perl", "node", "php", "eval", "xargs", "find", "sudo", "env":
+			return true
+		}
+	}
+	return false
+}
+
+func requiresLegacyRuleFallback(plan canonical.ShellPlan) bool {
+	return hasLegacyExecutionHandoff(plan) || hasOpaqueGitGlobalValue(plan)
+}
+
+func hasOpaqueGitGlobalValue(plan canonical.ShellPlan) bool {
+	for _, invocation := range plan.Invocations {
+		if invocation.Executable != "git" {
+			continue
+		}
+		for i := 0; i < len(invocation.Arguments); i++ {
+			if !invocation.ArgumentLiterals[i] {
+				break
+			}
+			argument := invocation.Arguments[i]
+			if gitGlobalTakesValue(argument) {
+				if i+1 >= len(invocation.Arguments) || !invocation.ArgumentLiterals[i+1] {
+					return true
+				}
+				i++
+				continue
+			}
+			if argument == "--" || (!strings.HasPrefix(argument, "-") && !isAttachedGitGlobal(argument) && !isCommandAdmittingGitGlobal(argument)) {
+				break
+			}
+		}
+	}
+	return false
+}
+
+func hasExecutableHeredoc(plan canonical.ShellPlan) bool {
+	for _, heredoc := range plan.Heredocs {
+		if heredoc.Executable {
+			return true
+		}
+	}
+	return false
+}
+
+// P0ExecutableHeredocReason deliberately remains separate from mention-aware
+// invocation matching. It names the conservative interim over-block rather
+// than pretending an interpreter heredoc was statically resolved.
+const P0ExecutableHeredocReason = "P0 interim: heredoc blocked pending preserve-unless-proved-data classification"
+
+func matchShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) *canonical.ShellMatchProvenance {
+	for _, invocation := range plan.Invocations {
+		if _, ok := rule.Executables[invocation.Executable]; !ok {
+			continue
+		}
+		subcommand, subcommandIndex := shellSubcommand(invocation)
+		if rule.Subcommand != "" && subcommand != rule.Subcommand {
+			continue
+		}
+		matchWords := make([]string, 1, len(invocation.Arguments)+1)
+		matchWords[0] = invocation.Executable
+		argumentStart := 0
+		if invocation.Executable == "git" && subcommandIndex >= 0 {
+			matchWords = append(matchWords, subcommand)
+			argumentStart = subcommandIndex + 1
+		}
+		for i := argumentStart; i < len(invocation.Arguments); i++ {
+			argument := invocation.Arguments[i]
+			if invocation.ArgumentLiterals[i] {
+				matchWords = append(matchWords, argument)
+			} else {
+				matchWords = append(matchWords, "<opaque-word>")
+			}
+		}
+		matched, err := rule.InputRegex.MatchString(strings.Join(matchWords, " "))
+		if err != nil || !matched {
+			continue
+		}
+		return &canonical.ShellMatchProvenance{
+			InvocationID:  invocation.ID,
+			Executable:    invocation.Executable,
+			Subcommand:    subcommand,
+			Span:          invocation.Span,
+			SourceDigest:  plan.SourceDigest,
+			ParserVersion: plan.ParserVersion,
+		}
+	}
+	return nil
+}
+
+func matchOpaqueShellInvocation(rule config.CompiledRule, plan canonical.ShellPlan) bool {
+	if rule.Decision != canonical.Deny {
+		return false
+	}
+	for _, opaque := range plan.OpaqueInvocations {
+		for executable := range rule.Executables {
+			candidate := canonical.ShellPlan{Invocations: []canonical.ShellInvocation{{
+				Executable:       executable,
+				Arguments:        opaque.Arguments,
+				ArgumentLiterals: opaque.ArgumentLiterals,
+			}}}
+			if matchShellInvocation(rule, candidate) != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func shellSubcommand(invocation canonical.ShellInvocation) (string, int) {
+	if invocation.Executable != "git" {
+		if len(invocation.Arguments) > 0 && invocation.ArgumentLiterals[0] {
+			return invocation.Arguments[0], 0
+		}
+		return "", -1
+	}
+	for i := 0; i < len(invocation.Arguments); i++ {
+		if !invocation.ArgumentLiterals[i] {
+			return "", -1
+		}
+		arg := invocation.Arguments[i]
+		if isTerminalGitGlobal(arg) {
+			return "", -1
+		}
+		if arg == "--" {
+			if i+1 < len(invocation.Arguments) && invocation.ArgumentLiterals[i+1] {
+				return invocation.Arguments[i+1], i + 1
+			}
+			return "", -1
+		}
+		if gitGlobalTakesValue(arg) {
+			if i+1 >= len(invocation.Arguments) || !invocation.ArgumentLiterals[i+1] {
+				return "", -1
+			}
+			i++
+			continue
+		}
+		if isAttachedGitGlobal(arg) {
+			continue
+		}
+		if isCommandAdmittingGitGlobal(arg) {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			return "", -1
+		}
+		return arg, i
+	}
+	return "", -1
+}
+
+func gitGlobalTakesValue(argument string) bool {
+	switch argument {
+	case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTerminalGitGlobal(argument string) bool {
+	switch argument {
+	case "--version", "--help", "-h", "--html-path", "--man-path", "--info-path":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCommandAdmittingGitGlobal(argument string) bool {
+	switch argument {
+	case "-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-advice":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAttachedGitGlobal(argument string) bool {
+	if strings.HasPrefix(argument, "-C") && len(argument) > len("-C") {
+		return true
+	}
+	for _, prefix := range []string{"--git-dir=", "--work-tree=", "--namespace=", "--exec-path=", "--config-env="} {
+		if strings.HasPrefix(argument, prefix) && len(argument) > len(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) checkPrecondition(cmd string, matchRe *regexp2.Regexp, cwd string, cdPrefix string, toolInput string) bool {
@@ -188,10 +428,9 @@ func ExtractCDPrefix(command string) string {
 // heredocStartRe matches heredoc markers: <<EOF, <<'EOF', <<"EOF", <<-EOF, etc.
 var heredocStartRe = regexp.MustCompile(`<<-?\s*(?:'(\w+)'|"(\w+)"|(\w+))`)
 
-// shellHeredocRe matches a shell interpreter receiving a heredoc as stdin.
-// This detects patterns like: bash <<'EOF', sh <<EOF, python <<'EOF', etc.
-// These heredocs contain executable code and must NOT be stripped.
-var shellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:bash|sh|dash|zsh|ksh|fish|python[23]?|ruby|perl|node|php)\s+<<`)
+// legacyShellHeredocRe is used only when the Bash parser rejects the input.
+// Valid input uses ShellPlan's statement/redirection structure instead.
+var legacyShellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:\S*/)?(?:bash|sh|dash|zsh|ksh|fish|python[23]?|ruby|perl|node|php)\b[^\n<]*<<`)
 
 // StripHeredocs removes heredoc bodies from a Bash command string.
 // This prevents deny rules from matching against data content such as
@@ -199,26 +438,50 @@ var shellHeredocRe = regexp.MustCompile(`(?:^|[;&|]\s*)(?:bash|sh|dash|zsh|ksh|f
 // However, heredocs fed as stdin to shell interpreters (bash, sh, python, etc.)
 // are preserved because they contain executable code that deny rules must check.
 func StripHeredocs(command string) string {
+	plan, err := canonical.ParseShellPlan(command)
+	return stripHeredocsWithPlan(command, plan, err)
+}
+
+func stripHeredocsWithPlan(command string, plan canonical.ShellPlan, planErr error) string {
 	lines := strings.Split(command, "\n")
 	var result []string
 	var delim string
 	keepBody := false
+	var pending []canonical.ShellHeredoc
+	nextHeredoc := 0
 
-	for _, line := range lines {
+	for lineIndex, line := range lines {
 		if delim != "" {
 			if keepBody {
 				result = append(result, line)
 			}
 			// Inside a heredoc body — skip/keep lines until closing delimiter.
 			if strings.TrimSpace(line) == delim {
-				delim = ""
-				keepBody = false
+				if len(pending) > 0 {
+					next := pending[0]
+					pending = pending[1:]
+					delim = next.Delimiter
+					keepBody = next.Executable
+				} else {
+					delim = ""
+					keepBody = false
+				}
 			}
 			continue
 		}
 
-		// Check if this line introduces a heredoc.
-		if m := heredocStartRe.FindStringSubmatch(line); m != nil {
+		if planErr == nil {
+			for nextHeredoc < len(plan.Heredocs) && plan.Heredocs[nextHeredoc].Line == uint(lineIndex+1) {
+				pending = append(pending, plan.Heredocs[nextHeredoc])
+				nextHeredoc++
+			}
+			if len(pending) > 0 {
+				next := pending[0]
+				pending = pending[1:]
+				delim = next.Delimiter
+				keepBody = next.Executable
+			}
+		} else if m := heredocStartRe.FindStringSubmatch(line); m != nil {
 			// Capture group 1, 2, or 3 holds the delimiter word.
 			for _, g := range m[1:] {
 				if g != "" {
@@ -226,9 +489,8 @@ func StripHeredocs(command string) string {
 					break
 				}
 			}
-			// If a shell interpreter is receiving this heredoc, keep the body.
-			if delim != "" && shellHeredocRe.MatchString(line) {
-				keepBody = true
+			if delim != "" {
+				keepBody = legacyShellHeredocRe.MatchString(line)
 			}
 		}
 

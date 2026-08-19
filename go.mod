@@ -5,4 +5,5 @@ go 1.22
 require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/dlclark/regexp2 v1.11.4
+	mvdan.cc/sh/v3 v3.10.0
 )

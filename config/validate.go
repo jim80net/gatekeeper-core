@@ -19,6 +19,8 @@ type CompiledRule struct {
 	Decision          canonical.Decision
 	Reason            string
 	Provenance        canonical.RuleProvenance
+	Executables       map[string]struct{}
+	Subcommand        string
 }
 
 // Validate checks and compiles every configuration rule. It is the sole
@@ -68,6 +70,25 @@ func (c *Config) CompiledRules() ([]CompiledRule, error) {
 			inputRegex = re
 		}
 
+		executables := make(map[string]struct{}, len(rule.Executables))
+		for _, executable := range rule.Executables {
+			executable = strings.TrimSpace(executable)
+			if executable == "" || strings.ContainsAny(executable, `/\\`) {
+				problems = append(problems, fmt.Errorf("%s: executables must contain exact basenames, got %q", label, executable))
+				ruleInvalid = true
+				continue
+			}
+			executables[executable] = struct{}{}
+		}
+		if rule.Subcommand != "" && len(executables) == 0 {
+			problems = append(problems, fmt.Errorf("%s: subcommand requires executables", label))
+			ruleInvalid = true
+		}
+		if strings.ContainsAny(rule.Subcommand, " \t\r\n") {
+			problems = append(problems, fmt.Errorf("%s: subcommand must be one exact token", label))
+			ruleInvalid = true
+		}
+
 		var decision canonical.Decision
 		switch rule.Decision {
 		case "allow":
@@ -108,6 +129,8 @@ func (c *Config) CompiledRules() ([]CompiledRule, error) {
 					Source: rule.Source,
 					Index:  rule.SourceIndex,
 				},
+				Executables: executables,
+				Subcommand:  rule.Subcommand,
 			})
 		}
 	}
